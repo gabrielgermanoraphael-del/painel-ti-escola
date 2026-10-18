@@ -1,0 +1,6 @@
+# Lista de APs da escola - uma linha por AP no formato: Nome;IP
+# Copie este arquivo com o nome aps.txt e troque pelos seus APs (pegue os IPs no WiFiman).
+# Linhas que começam com # são ignoradas.
+Sala 1;192.168.1.21
+Sala 5;192.168.1.25
+Biblioteca;192.168.1.30

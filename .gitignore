@@ -1,0 +1,12 @@
+# Dados locais da escola (não vão para o GitHub)
+aps.txt
+chamados.db
+status.json
+status.tmp
+eventos.csv
+*.log
+
+# Python
+__pycache__/
+*.pyc
+.venv/
