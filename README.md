@@ -10,8 +10,9 @@ Feito em Python, com painel web em [Streamlit](https://streamlit.io) e notifica�
 |---|---|---|
 | Monitor de APs | `monitor_aps.py` | Testa (ping) cada AP a cada minuto. Se um AP cair ou voltar, manda notificação para o celular. Grava `status.json` e o histórico em `eventos.csv`. |
 | Painel | `painel.py` | Mostra cada AP (🟢 online, 🟡 instável, 🔴 fora), histórico de quedas, edição da lista de APs e teste manual. |
-| Chamados | `pages/Chamados.py` | Recebe os chamados enviados pelos QR codes das salas, guarda tudo em `chamados.db` (SQLite) e controla o andamento: Aberto → Em atendimento → Resolvido. Também tem histórico, exportação para Excel e estatísticas. |
+| Chamados | `pages/Chamados.py` | Lista os chamados da API e controla o andamento: Aberto → Em atendimento → Resolvido. Também tem registro manual, histórico, exportação para Excel e estatísticas. Na primeira vez pede o endereço da API, usuário e senha (salvos em `api.json`). |
 | Atalho | `abrir_painel.pyw`, `criar_atalho.py`, `painel.ico` | Cria o ícone **Painel do TI** na área de trabalho, que abre o painel com um clique. |
+| API | `api/` | **Nova:** API de chamados (FastAPI + PostgreSQL) que recebe os chamados do QR code, guarda no banco e atende o painel. Veja [`api/README.md`](api/README.md). |
 
 Os chamados chegam pela página de QR code do repositório [chamar-ti](https://github.com/gabrielgermanoraphael-del/chamar-ti): o professor escaneia, escolhe o problema (internet, chave do carrinho, lousa digital, projetor...) e o aviso chega no celular e no painel.
 
@@ -42,6 +43,6 @@ python monitor_aps.py                 # liga o monitor (também dá para ligar p
 
 ## Observações
 
-- O ntfy.sh guarda as mensagens por cerca de 12 horas. Para não perder chamados no histórico, deixe o painel aberto durante o expediente ou abra-o pelo menos uma vez por dia.
+- Os chamados ficam guardados no banco da API: o painel pode ficar fechado sem perder nada.
 - Para o monitor enxergar os APs, o computador precisa estar na mesma rede deles. Se tudo aparecer "sem resposta" no Wi-Fi, use o cabo de rede.
 - Os dados da escola (`aps.txt`, `chamados.db`, `eventos.csv`, `status.json` e logs) ficam só no computador e não são enviados ao GitHub (veja o `.gitignore`).

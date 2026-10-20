@@ -32,6 +32,9 @@ INTERVALO_SEGUNDOS = 60      # de quanto em quanto tempo testa os APs
 FALHAS_PARA_ALERTAR = 3      # quantos testes seguidos sem resposta antes de avisar
 TENTATIVAS_POR_TESTE = 2     # pings por AP em cada teste
 TIMEOUT_PING_MS = 1000       # espera máxima de cada ping
+# Opcional: endereço da API de chamados (ex.: https://sua-api.onrender.com). Se preenchido, o monitor
+# "cutuca" a API a cada 10 minutos para ela não adormecer no plano gratuito da nuvem.
+API_SAUDE_URL = ""
 # ===========================================================
 
 PASTA = Path(__file__).resolve().parent
@@ -201,6 +204,20 @@ def salvar_status(aps, resultado, falhas, caido_desde, sem_rede=False):
         pass
 
 
+_ultimo_cutucao = 0.0
+
+
+def manter_api_acordada():
+    global _ultimo_cutucao
+    if not API_SAUDE_URL or time.time() - _ultimo_cutucao < 600:
+        return
+    _ultimo_cutucao = time.time()
+    try:
+        urllib.request.urlopen(API_SAUDE_URL.rstrip("/") + "/saude", timeout=90).close()
+    except Exception:  # noqa: BLE001 - só um "bom dia" para a API, não pode atrapalhar o monitor
+        pass
+
+
 def monitorar(aps):
     falhas = [0] * len(aps)                  # testes seguidos sem resposta (uma posição por AP)
     caido_desde = {}                         # posição do AP -> horário em que foi considerado caído
@@ -214,6 +231,7 @@ def monitorar(aps):
 
     while True:
         inicio = time.time()
+        manter_api_acordada()
 
         # Lista de APs editada (pelo painel ou no bloco de notas)? Recarrega sem precisar reiniciar.
         try:

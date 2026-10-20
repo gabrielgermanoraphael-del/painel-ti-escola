@@ -10,3 +10,8 @@ eventos.csv
 __pycache__/
 *.pyc
 .venv/
+
+# API e painel conectado (dados e credenciais locais)
+api.json
+.env
+*.db
