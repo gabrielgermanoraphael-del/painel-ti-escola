@@ -29,9 +29,16 @@ class Config:
     NTFY_TOKEN: str = os.getenv("NTFY_TOKEN", "")      # opcional (servidor ntfy próprio)
 
     # Proteção contra abuso no endpoint público
-    LIMITE_POR_IP: int = int(os.getenv("LIMITE_POR_IP", "10"))          # chamados...
+    # Na escola todos os celulares saem pelo mesmo IP: o limite principal é por professor
+    LIMITE_POR_PESSOA: int = int(os.getenv("LIMITE_POR_PESSOA", "10"))  # chamados por professor...
+    LIMITE_POR_IP: int = int(os.getenv("LIMITE_POR_IP", "60"))          # ...e por IP...
     JANELA_IP_SEG: int = int(os.getenv("JANELA_IP_SEG", "600"))         # ...a cada 10 min
     JANELA_DUPLICADO_SEG: int = int(os.getenv("JANELA_DUPLICADO_SEG", "120"))
+
+    # Login dos professores com Google
+    GOOGLE_CLIENT_ID: str = os.getenv("GOOGLE_CLIENT_ID", "")
+    DOMINIO_PERMITIDO: str = os.getenv("DOMINIO_PERMITIDO", "educ.indaiatuba.sp.gov.br").lower()
+    PROFESSOR_TOKEN_DIAS: int = int(os.getenv("PROFESSOR_TOKEN_DIAS", "30"))
 
     # Fuso usado nas estatísticas por dia
     FUSO: str = os.getenv("FUSO", "America/Sao_Paulo")

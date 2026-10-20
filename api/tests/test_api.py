@@ -12,14 +12,16 @@ os.environ["DATABASE_URL"] = os.getenv("TEST_DATABASE_URL", f"sqlite:///{_tmp}/t
 os.environ["JWT_SECRET"] = "segredo-de-teste-com-mais-de-32-caracteres-ok"
 os.environ["NTFY_TOPIC"] = "topico-teste"
 os.environ["CORS_ORIGINS"] = "https://exemplo.github.io"
+os.environ["GOOGLE_CLIENT_ID"] = "123-teste.apps.googleusercontent.com"
+os.environ["DOMINIO_PERMITIDO"] = "educ.indaiatuba.sp.gov.br"
 
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app import main  # noqa: E402
 from app.db import Base, SessionLocal, engine  # noqa: E402
 from app.limite import limite_ip  # noqa: E402
-from app.models import Chamado, Usuario, agora  # noqa: E402
-from app.security import gerar_hash  # noqa: E402
+from app.models import Chamado, Pessoa, Usuario, agora  # noqa: E402
+from app.security import criar_token_professor, gerar_hash  # noqa: E402
 
 ENVIADOS = []
 main.notificar_ntfy = lambda *a, **k: ENVIADOS.append(a) or True
@@ -35,7 +37,15 @@ class TesteAPI(unittest.TestCase):
         with SessionLocal() as db:
             db.add(Usuario(usuario="gabriel", nome="Gabriel", senha_hash=gerar_hash("senha-forte-1"), papel="admin"))
             db.add(Usuario(usuario="tec", nome="Técnico", senha_hash=gerar_hash("senha-forte-2"), papel="tecnico"))
+            prof = Pessoa(google_sub="g-ana", email="ana@educ.indaiatuba.sp.gov.br", nome="Ana Prof",
+                          codigo="AAA-AAA", status="ativo", todas_salas=True)
+            db.add(prof)
             db.commit()
+            self.prof = {"Authorization": "Bearer " + criar_token_professor(prof)[0]}
+
+    def abrir(self, corpo, h=None):
+        """Abre chamado pela página do QR, como um professor liberado em todas as salas."""
+        return self.cli.post("/chamados", json=corpo, headers=self.prof if h is None else h)
 
     def tearDown(self):
         self.cli.__exit__(None, None, None)
@@ -50,43 +60,57 @@ class TesteAPI(unittest.TestCase):
         self.assertTrue(self.cli.get("/saude").json()["ok"])
 
     def test_abrir_chamado_e_notificar(self):
-        r = self.cli.post("/chamados", json={"sala": "3", "tipo": "projetor", "detalhe": "  Liga mas   não dá imagem "})
+        r = self.abrir({"sala": "3", "tipo": "projetor", "detalhe": "  Liga mas   não dá imagem "})
         self.assertEqual(r.status_code, 201, r.text)
         d = r.json()
         self.assertEqual((d["local"], d["tipo_nome"], d["duplicado"]), ("Sala 3", "Projetor", False))
         self.assertEqual(len(ENVIADOS), 1)
         self.assertEqual(ENVIADOS[0][0], "Sala 3: Projetor")
-        self.assertEqual(ENVIADOS[0][1], "Liga mas não dá imagem")
+        self.assertEqual(ENVIADOS[0][1], f"Liga mas não dá imagem\nAberto por Ana Prof · chamado #{d['id']}")
 
     def test_codigos_dos_qr_impressos(self):
         for sala, nome in [("Sala 13 (IPP)", "Sala 13 (IPP)"), ("Coordenação", "Coordenação"),
                            ("professores", "Sala dos Professores"), ("SECRETARIA", "Secretaria"), ("11", "Sala 11")]:
-            r = self.cli.post("/chamados", json={"sala": sala, "tipo": "internet"})
+            r = self.abrir({"sala": sala, "tipo": "internet"})
             self.assertEqual(r.status_code, 201, (sala, r.text))
             self.assertEqual(r.json()["local"], nome)
 
     def test_sala_inexistente_e_tipo_invalido(self):
-        self.assertEqual(self.cli.post("/chamados", json={"sala": "99", "tipo": "som"}).status_code, 404)
-        self.assertEqual(self.cli.post("/chamados", json={"sala": "1", "tipo": "cafe"}).status_code, 422)
-        self.assertEqual(self.cli.post("/chamados", json={"sala": "1", "tipo": "som", "detalhe": "x" * 301}).status_code, 422)
+        self.assertEqual(self.abrir({"sala": "99", "tipo": "som"}).status_code, 404)
+        self.assertEqual(self.abrir({"sala": "1", "tipo": "cafe"}).status_code, 422)
+        self.assertEqual(self.abrir({"sala": "1", "tipo": "som", "detalhe": "x" * 301}).status_code, 422)
         self.assertEqual(ENVIADOS, [])
 
     def test_duplicado_nao_notifica_de_novo(self):
-        a = self.cli.post("/chamados", json={"sala": "2", "tipo": "som"}).json()
-        b = self.cli.post("/chamados", json={"sala": "2", "tipo": "som"})
+        a = self.abrir({"sala": "2", "tipo": "som"}).json()
+        b = self.abrir({"sala": "2", "tipo": "som"})
         self.assertEqual(b.status_code, 201)
         self.assertTrue(b.json()["duplicado"])
         self.assertEqual(a["id"], b.json()["id"])
         self.assertEqual(len(ENVIADOS), 1)
         # tipo diferente na mesma sala é outro chamado
-        self.assertFalse(self.cli.post("/chamados", json={"sala": "2", "tipo": "lousa"}).json()["duplicado"])
+        self.assertFalse(self.abrir({"sala": "2", "tipo": "lousa"}).json()["duplicado"])
 
-    def test_limite_por_ip(self):
+    def test_limite_por_professor_e_por_ip(self):
         cods = ["internet", "chave", "lousa", "projetor", "computador", "som", "tablet", "impressora", "outro"]
-        res = [self.cli.post("/chamados", json={"sala": str(1 + i % 8), "tipo": cods[i % 9]}).status_code
+        res = [self.abrir({"sala": str(1 + i % 8), "tipo": cods[i % 9]}).status_code
                for i in range(12)]
         self.assertEqual(res.count(201), 10)
         self.assertEqual(res[-1], 429)
+        # outro professor no mesmo IP (Wi-Fi da escola) ainda consegue, até o limite geral do IP
+        with SessionLocal() as db:
+            p = Pessoa(google_sub="g-bia", email="bia@educ.indaiatuba.sp.gov.br", nome="Bia", codigo="BBB-BBB",
+                       status="ativo", todas_salas=True)
+            db.add(p)
+            db.commit()
+            h = {"Authorization": "Bearer " + criar_token_professor(p)[0]}
+        self.assertEqual(self.abrir({"sala": "7", "tipo": "som"}, h).status_code, 201)
+        antes = main.config.LIMITE_POR_IP
+        main.config.LIMITE_POR_IP = 11  # 10 da Ana + 1 da Bia já contados
+        try:
+            self.assertEqual(self.abrir({"sala": "8", "tipo": "som"}, h).status_code, 429)
+        finally:
+            main.config.LIMITE_POR_IP = antes
 
     def test_cors_libera_so_a_pagina(self):
         ok = self.cli.options("/chamados", headers={"Origin": "https://exemplo.github.io",
@@ -102,6 +126,21 @@ class TesteAPI(unittest.TestCase):
         for rota in ["/chamados", "/estatisticas", "/locais", "/eu", "/chamados/1"]:
             self.assertEqual(self.cli.get(rota).status_code, 401, rota)
         self.assertEqual(self.cli.get("/chamados", headers={"Authorization": "Bearer lixo"}).status_code, 401)
+        for rota in ["/pessoas", "/pessoas/codigo/AAA-AAA", "/usuarios"]:
+            self.assertEqual(self.cli.get(rota).status_code, 401, rota)
+        self.assertEqual(self.cli.put("/pessoas/1/acesso", json={"status": "ativo", "todas_salas": True}).status_code, 401)
+
+    def test_abrir_chamado_exige_login_google(self):
+        self.assertEqual(self.cli.post("/chamados", json={"sala": "3", "tipo": "som"}).status_code, 401)
+        self.assertEqual(self.cli.get("/professor/eu").status_code, 401)
+        self.assertEqual(ENVIADOS, [])
+
+    def test_token_do_professor_e_do_ti_nao_se_misturam(self):
+        # o professor (id 1) não entra no painel do TI, mesmo existindo o usuário id 1
+        self.assertEqual(self.cli.get("/chamados", headers=self.prof).status_code, 401)
+        self.assertEqual(self.cli.get("/pessoas", headers=self.prof).status_code, 401)
+        # e o token do TI não serve para abrir chamado como professor
+        self.assertEqual(self.abrir({"sala": "3", "tipo": "som"}, self.token()).status_code, 401)
 
     def test_senha_errada(self):
         r = self.cli.post("/auth/login", json={"usuario": "gabriel", "senha": "errada"})
@@ -112,16 +151,19 @@ class TesteAPI(unittest.TestCase):
         self.assertEqual(self.cli.post("/locais", json={"codigo": "14", "nome": "Sala 14"}, headers=h).status_code, 403)
         self.assertEqual(self.cli.post("/usuarios", json={"usuario": "x1", "nome": "X", "senha": "12345678"},
                                        headers=h).status_code, 403)
+        self.assertEqual(self.cli.get("/usuarios", headers=h).status_code, 403)
+        self.assertEqual(self.cli.patch("/usuarios/2", json={"papel": "admin"}, headers=h).status_code, 403)
 
     # ---------------- fluxo completo do TI
     def test_fluxo_atender_resolver_reabrir(self):
         h = self.token()
-        id_ = self.cli.post("/chamados", json={"sala": "5", "tipo": "lousa", "detalhe": "caneta não funciona"}).json()["id"]
+        id_ = self.abrir({"sala": "5", "tipo": "lousa", "detalhe": "caneta não funciona"}).json()["id"]
         abertos = self.cli.get("/chamados", params={"status": ["aberto", "atendimento"]}, headers=h).json()
         self.assertEqual([c["id"] for c in abertos], [id_])
 
         c = self.cli.post(f"/chamados/{id_}/atender", headers=h).json()
         self.assertEqual((c["status"], c["atendido_por"]), ("atendimento", "Gabriel"))
+        self.assertEqual((c["aberto_por"], c["aberto_por_email"]), ("Ana Prof", "ana@educ.indaiatuba.sp.gov.br"))
         self.assertIsNotNone(c["atendido_em"])
 
         c = self.cli.post(f"/chamados/{id_}/resolver", json={"solucao": "Calibrei o PointWrite"}, headers=h).json()
@@ -141,14 +183,14 @@ class TesteAPI(unittest.TestCase):
                                                     "detalhe": "pausada"}, headers=h)
         self.assertEqual((r.status_code, r.json()["origem"]), (201, "manual"))
         self.assertEqual(ENVIADOS, [])  # manual não notifica (o técnico já sabe)
-        self.cli.post("/chamados", json={"sala": "1", "tipo": "som"})
+        self.abrir({"sala": "1", "tipo": "som"})
         so_secretaria = self.cli.get("/chamados", params={"local_id": locais["Secretaria"]}, headers=h).json()
         self.assertEqual([c["local"] for c in so_secretaria], ["Secretaria"])
         self.assertEqual(self.cli.get("/chamados", params={"status": "xyz"}, headers=h).status_code, 422)
 
     def test_estatisticas(self):
         h = self.token()
-        ids = [self.cli.post("/chamados", json={"sala": s, "tipo": t}).json()["id"]
+        ids = [self.abrir({"sala": s, "tipo": t}).json()["id"]
                for s, t in [("1", "projetor"), ("1", "som"), ("2", "projetor")]]
         # simula um chamado resolvido 30 minutos depois de aberto
         with SessionLocal() as db:
@@ -167,17 +209,36 @@ class TesteAPI(unittest.TestCase):
         h = self.token()
         r = self.cli.post("/locais", json={"codigo": "14", "nome": "Sala 14"}, headers=h)
         self.assertEqual(r.status_code, 201)
-        self.assertEqual(self.cli.post("/chamados", json={"sala": "14", "tipo": "som"}).status_code, 201)
+        self.assertEqual(self.abrir({"sala": "14", "tipo": "som"}).status_code, 201)
         self.assertEqual(self.cli.post("/locais", json={"codigo": "14", "nome": "X"}, headers=h).status_code, 409)
         # desativar o local bloqueia novos chamados
         self.cli.patch(f"/locais/{r.json()['id']}", json={"ativo": False}, headers=h)
-        self.assertEqual(self.cli.post("/chamados", json={"sala": "14", "tipo": "lousa"}).status_code, 404)
+        self.assertEqual(self.abrir({"sala": "14", "tipo": "lousa"}).status_code, 404)
 
         r = self.cli.post("/usuarios", json={"usuario": "Maria", "nome": "Maria", "senha": "outra-senha-9"}, headers=h)
         self.assertEqual(r.status_code, 201)
         self.token("maria", "outra-senha-9")
         self.assertEqual(self.cli.post("/usuarios", json={"usuario": "maria", "nome": "M", "senha": "12345678"},
                                        headers=h).status_code, 409)
+
+
+
+    def test_admin_gerencia_contas_do_ti(self):
+        h = self.token()
+        contas = {u["usuario"]: u for u in self.cli.get("/usuarios", headers=h).json()}
+        self.assertEqual(set(contas), {"gabriel", "tec"})
+        tec_id, eu_id = contas["tec"]["id"], contas["gabriel"]["id"]
+        # promover e depois desativar o técnico
+        self.assertEqual(self.cli.patch(f"/usuarios/{tec_id}", json={"papel": "admin"}, headers=h).json()["papel"], "admin")
+        self.cli.patch(f"/usuarios/{tec_id}", json={"ativo": False}, headers=h)
+        self.assertEqual(self.cli.post("/auth/login", json={"usuario": "tec", "senha": "senha-forte-2"}).status_code, 401)
+        # trocar senha
+        self.cli.patch(f"/usuarios/{tec_id}", json={"ativo": True, "senha": "nova-senha-123"}, headers=h)
+        self.token("tec", "nova-senha-123")
+        # ninguém tira o próprio acesso de admin (evita ficar sem administrador)
+        self.assertEqual(self.cli.patch(f"/usuarios/{eu_id}", json={"papel": "tecnico"}, headers=h).status_code, 409)
+        self.assertEqual(self.cli.patch(f"/usuarios/{eu_id}", json={"ativo": False}, headers=h).status_code, 409)
+        self.assertEqual(self.cli.patch("/usuarios/999", json={"ativo": False}, headers=h).status_code, 404)
 
 
 if __name__ == "__main__":

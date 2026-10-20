@@ -4,24 +4,19 @@ Chamados do TI (página do painel Streamlit) — versão conectada à API
 Lê e atualiza os chamados pela API de Chamados (pasta api/ do projeto).
 Os chamados ficam guardados no banco da API, não mais neste computador.
 
-Na primeira vez, o painel pede o endereço da API, o usuário e a senha,
-e guarda em api.json (que não vai para o GitHub).
+A conexão com a API fica em api_cliente.py (compartilhada com a página Professores).
 """
 
-import json
-import urllib.error
-import urllib.parse
-import urllib.request
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
 import streamlit as st
 
-PASTA = Path(__file__).resolve().parent
-if PASTA.name == "pages":
-    PASTA = PASTA.parent
-ARQ_CONFIG = PASTA / "api.json"
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from api_cliente import ErroAPI, api, exigir_configuracao  # noqa: E402
+
 FUSO = "America/Sao_Paulo"
 ATUALIZAR_A_CADA = 15  # segundos
 
@@ -33,72 +28,10 @@ TIPOS = {"internet": "Internet / Wi-Fi", "chave": "Chave do carrinho de tablets"
 STATUS = {"aberto": "🔴 Aberto", "atendimento": "🟡 Em atendimento", "resolvido": "🟢 Resolvido"}
 
 
-# ---------------------------------------------------------------- configuração
-def ler_config():
-    try:
-        return json.loads(ARQ_CONFIG.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-
-
-class ErroAPI(Exception):
-    pass
-
-
-def _requisicao(metodo, caminho, corpo=None, params=None, token=None, url=None):
-    cfg = ler_config() or {}
-    base = (url or cfg.get("url", "")).rstrip("/")
-    endereco = base + caminho
-    if params:
-        endereco += "?" + urllib.parse.urlencode(params, doseq=True)
-    dados = json.dumps(corpo).encode() if corpo is not None else None
-    req = urllib.request.Request(endereco, data=dados, method=metodo)
-    req.add_header("Content-Type", "application/json")
-    if token:
-        req.add_header("Authorization", "Bearer " + token)
-    try:
-        with urllib.request.urlopen(req, timeout=15) as r:
-            return json.loads(r.read().decode() or "null")
-    except urllib.error.HTTPError as e:
-        try:
-            detalhe = json.loads(e.read().decode()).get("detail")
-        except Exception:  # noqa: BLE001
-            detalhe = None
-        raise ErroAPI(f"{e.code}: {detalhe or e.reason}") from None
-    except (urllib.error.URLError, TimeoutError, OSError) as e:
-        raise ErroAPI(f"API fora do ar ou sem internet ({e})") from None
-
-
-def entrar(url, usuario, senha):
-    r = _requisicao("POST", "/auth/login", {"usuario": usuario, "senha": senha}, url=url)
-    st.session_state["token"] = r["access_token"]
-    st.session_state["token_expira"] = r["expira_em"]
-    st.session_state["nome"] = r["nome"]
-
-
-def token():
-    expira = st.session_state.get("token_expira")
-    if st.session_state.get("token") and expira and \
-            datetime.fromisoformat(expira.replace("Z", "+00:00")) > datetime.now(timezone.utc) + timedelta(minutes=5):
-        return st.session_state["token"]
-    cfg = ler_config()
-    entrar(cfg["url"], cfg["usuario"], cfg["senha"])
-    return st.session_state["token"]
-
-
-def api(metodo, caminho, corpo=None, params=None):
-    try:
-        return _requisicao(metodo, caminho, corpo, params, token=token())
-    except ErroAPI as e:
-        if str(e).startswith("401"):  # token vencido: entra de novo uma vez
-            st.session_state.pop("token", None)
-            return _requisicao(metodo, caminho, corpo, params, token=token())
-        raise
-
-
 def para_df(lista):
     df = pd.DataFrame(lista, columns=["id", "local_id", "local", "tipo", "tipo_nome", "detalhe", "status", "origem",
-                                      "criado_em", "atendido_em", "resolvido_em", "solucao", "atendido_por"])
+                                      "criado_em", "atendido_em", "resolvido_em", "solucao", "atendido_por",
+                                      "aberto_por"])
     for c in ("criado_em", "atendido_em", "resolvido_em"):
         df[c] = pd.to_datetime(df[c], utc=True, errors="coerce").dt.tz_convert(FUSO).dt.tz_localize(None)
     return df
@@ -137,22 +70,7 @@ if "aviso" in st.session_state:
     st.toast(st.session_state.pop("aviso"), icon="✅")
 
 # ---- primeira configuração
-if not ler_config():
-    st.info("Configure a conexão com a API de chamados. Isso fica salvo só neste computador (api.json).")
-    with st.form("config"):
-        url = st.text_input("Endereço da API", placeholder="https://sua-api.onrender.com")
-        usuario = st.text_input("Usuário")
-        senha = st.text_input("Senha", type="password")
-        if st.form_submit_button("Conectar", type="primary"):
-            try:
-                entrar(url.strip(), usuario.strip(), senha)
-                ARQ_CONFIG.write_text(json.dumps({"url": url.strip().rstrip("/"), "usuario": usuario.strip(),
-                                                  "senha": senha}, indent=1), encoding="utf-8")
-                st.session_state["aviso"] = "Conectado à API!"
-                st.rerun()
-            except ErroAPI as e:
-                st.error(f"Não consegui conectar: {e}")
-    st.stop()
+exigir_configuracao()
 
 
 @st.fragment(run_every=ATUALIZAR_A_CADA)
@@ -190,6 +108,8 @@ def bloco_ativos():
             col_info.markdown(f"### {ICONE_TIPO.get(c['tipo'], '🔔')} {c['local']} — {c['tipo_nome']}")
             linha = f"{STATUS[c['status']]} · nº {c['id']} · recebido {ha_quanto(c['criado_em'])} " \
                     f"({c['criado_em']:%H:%M}) · {'QR code' if c['origem'] == 'qrcode' else 'manual'}"
+            if c["aberto_por"]:
+                linha += f" · por {c['aberto_por']}"
             if c["status"] == "atendimento" and c["atendido_por"]:
                 linha += f" · com {c['atendido_por']}"
             col_info.caption(linha)
@@ -252,6 +172,7 @@ with aba_hist:
         tabela = pd.DataFrame({
             "Nº": filt["id"], "Recebido": filt["criado_em"].dt.strftime("%d/%m %H:%M"),
             "Local": filt["local"], "Tipo": filt["tipo_nome"], "Detalhe": filt["detalhe"],
+            "Aberto por": filt["aberto_por"].fillna(""),
             "Status": filt["status"].map(STATUS),
             "Resolvido": filt["resolvido_em"].dt.strftime("%d/%m %H:%M").fillna(""),
             "Solução": filt["solucao"], "Atendido por": filt["atendido_por"].fillna(""),

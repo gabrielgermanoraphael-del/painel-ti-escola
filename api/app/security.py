@@ -12,9 +12,12 @@ from sqlalchemy.orm import Session
 
 from .config import config
 from .db import get_db
-from .models import Usuario
+from .models import Pessoa, Usuario
 
 ITERACOES = 600_000
+# Tokens do TI e dos professores usam o mesmo segredo; o "aud" impede usar um no lugar do outro
+AUD_TI = "ti"
+AUD_PROFESSOR = "professor"
 _bearer = HTTPBearer(auto_error=False)
 
 
@@ -36,7 +39,14 @@ def conferir_senha(senha: str, guardado: str) -> bool:
 
 def criar_token(u: Usuario) -> tuple[str, datetime]:
     expira = datetime.now(timezone.utc) + timedelta(hours=config.JWT_HORAS)
-    token = jwt.encode({"sub": str(u.id), "papel": u.papel, "exp": expira}, config.JWT_SECRET, algorithm="HS256")
+    token = jwt.encode({"sub": str(u.id), "aud": AUD_TI, "papel": u.papel, "exp": expira},
+                       config.JWT_SECRET, algorithm="HS256")
+    return token, expira
+
+
+def criar_token_professor(p: Pessoa) -> tuple[str, datetime]:
+    expira = datetime.now(timezone.utc) + timedelta(days=config.PROFESSOR_TOKEN_DIAS)
+    token = jwt.encode({"sub": str(p.id), "aud": AUD_PROFESSOR, "exp": expira}, config.JWT_SECRET, algorithm="HS256")
     return token, expira
 
 
@@ -47,7 +57,7 @@ def usuario_atual(cred: HTTPAuthorizationCredentials | None = Depends(_bearer),
     if cred is None:
         raise erro
     try:
-        dados = jwt.decode(cred.credentials, config.JWT_SECRET, algorithms=["HS256"])
+        dados = jwt.decode(cred.credentials, config.JWT_SECRET, algorithms=["HS256"], audience=AUD_TI)
         u = db.get(Usuario, int(dados["sub"]))
     except (jwt.PyJWTError, KeyError, ValueError):
         raise erro
@@ -60,3 +70,20 @@ def somente_admin(u: Usuario = Depends(usuario_atual)) -> Usuario:
     if u.papel != "admin":
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Apenas administradores")
     return u
+
+
+def professor_atual(cred: HTTPAuthorizationCredentials | None = Depends(_bearer),
+                    db: Session = Depends(get_db)) -> Pessoa:
+    """Professor logado com Google. Não confere o status (pendente/bloqueado): quem chama decide."""
+    erro = HTTPException(status.HTTP_401_UNAUTHORIZED, "Entre com o seu e-mail institucional",
+                         headers={"WWW-Authenticate": "Bearer"})
+    if cred is None:
+        raise erro
+    try:
+        dados = jwt.decode(cred.credentials, config.JWT_SECRET, algorithms=["HS256"], audience=AUD_PROFESSOR)
+        p = db.get(Pessoa, int(dados["sub"]))
+    except (jwt.PyJWTError, KeyError, ValueError):
+        raise erro
+    if not p:
+        raise erro
+    return p
