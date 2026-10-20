@@ -1,0 +1,42 @@
+# Servidor de notificações próprio do TI (ntfy) com HTTPS automático (Caddy).
+# Antes de subir, rode ./configurar.sh (gera server.yml e .env com usuários e tokens).
+#   docker compose up -d        liga
+#   docker compose logs -f      acompanha
+#   docker compose pull && docker compose up -d   atualiza
+
+services:
+  ntfy:
+    image: binwiederhier/ntfy:v2.32.0
+    command: serve
+    environment:
+      TZ: America/Sao_Paulo
+      NTFY_BASE_URL: https://${DOMINIO:?rode ./configurar.sh primeiro}
+    volumes:
+      - ./server.yml:/etc/ntfy/server.yml:ro
+      - ntfy-dados:/var/lib/ntfy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --tries=1 -O- http://localhost:80/v1/health | grep -q '\"healthy\":true'"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMINIO: ${DOMINIO}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-dados:/data
+      - caddy-config:/config
+    depends_on:
+      - ntfy
+    restart: unless-stopped
+
+volumes:
+  ntfy-dados:
+  caddy-dados:
+  caddy-config:

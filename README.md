@@ -13,6 +13,7 @@ Feito em Python, com painel web em [Streamlit](https://streamlit.io) e notifica�
 | Chamados | `pages/Chamados.py` | Lista os chamados da API e controla o andamento: Aberto → Em atendimento → Resolvido. Também tem registro manual, histórico, exportação para Excel e estatísticas. Mostra quem abriu cada chamado. Na primeira vez pede o endereço da API, usuário e senha (salvos em `api.json`). |
 | Professores | `pages/Professores.py` | Libera os professores que entraram com o Google na página do QR: digita o código que apareceu no celular, escolhe as salas e libera. Também bloqueia e, para administradores, gerencia as contas do TI. |
 | Atalho | `abrir_painel.pyw`, `criar_atalho.py`, `painel.ico` | Cria o ícone **Painel do TI** na área de trabalho, que abre o painel com um clique. |
+| Servidor de avisos | `ntfy-servidor/` | Servidor **ntfy próprio** (Oracle Cloud, Docker, HTTPS), fechado com login: só a API e o monitor publicam, só os técnicos leem. Veja [`ntfy-servidor/README.md`](ntfy-servidor/README.md). |
 | API | `api/` | **Nova:** API de chamados (FastAPI + PostgreSQL) que recebe os chamados do QR code, guarda no banco e atende o painel. Veja [`api/README.md`](api/README.md). |
 
 Os chamados chegam pela página de QR code do repositório [chamar-ti](https://github.com/gabrielgermanoraphael-del/chamar-ti): o professor escaneia, entra com o e-mail institucional (Google), escolhe o problema (internet, chave do carrinho, lousa digital, projetor...) e o aviso chega no celular e no painel.
@@ -28,7 +29,7 @@ python -m pip install -r requirements.txt
 Depois:
 
 1. Copie `aps.exemplo.txt` com o nome `aps.txt` e coloque os seus APs, um por linha, no formato `Sala 5;192.168.1.25`.
-2. Troque o tópico do ntfy (`TOPICO_NTFY`) em `monitor_aps.py` pelo seu e inscreva-se nele no app ntfy do celular (os avisos de chamados vêm da API, com o tópico configurado no servidor).
+2. Para os avisos irem pelo servidor ntfy próprio, crie o `ntfy.json` ao lado do `monitor_aps.py` (o conteúdo aparece no `credenciais.txt` do servidor). Sem ele, o monitor usa o ntfy.sh público com o `TOPICO_NTFY` do topo do arquivo.
 3. (Opcional, Windows) Crie o atalho na área de trabalho:
    ```bash
    python criar_atalho.py
@@ -46,4 +47,4 @@ python monitor_aps.py                 # liga o monitor (também dá para ligar p
 
 - Os chamados ficam guardados no banco da API: o painel pode ficar fechado sem perder nada.
 - Para o monitor enxergar os APs, o computador precisa estar na mesma rede deles. Se tudo aparecer "sem resposta" no Wi-Fi, use o cabo de rede.
-- Os dados da escola (`aps.txt`, `chamados.db`, `eventos.csv`, `status.json` e logs) ficam só no computador e não são enviados ao GitHub (veja o `.gitignore`).
+- Os dados da escola (`aps.txt`, `chamados.db`, `eventos.csv`, `status.json` e logs) e as credenciais (`api.json`, `ntfy.json`) ficam só no computador e não são enviados ao GitHub (veja o `.gitignore`).

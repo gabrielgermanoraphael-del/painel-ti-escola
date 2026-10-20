@@ -15,3 +15,8 @@ __pycache__/
 api.json
 .env
 *.db
+
+# Servidor ntfy (credenciais e configuração gerada)
+ntfy.json
+ntfy-servidor/server.yml
+ntfy-servidor/credenciais.txt

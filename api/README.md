@@ -5,7 +5,7 @@ Servidor que recebe os chamados abertos pelos QR codes das salas, guarda tudo nu
 ```
 Professor ──QR code──▶ Página (GitHub Pages) ──"Entrar com Google"──▶ POST /auth/google ──▶ API ──▶ PostgreSQL
                                              ──POST /chamados (com token)─────────────────▶  │
-                                                                                              └──▶ ntfy ──▶ celular do TI
+                                                                                              └──▶ ntfy próprio ──▶ celular do TI
 Painel do TI (Streamlit) ──usuário e senha + /chamados, /pessoas, /estatisticas──▶ API
 ```
 
@@ -109,7 +109,7 @@ Sugestão de serviços gratuitos para o piloto: **Neon** para o banco e **Render
    - `DATABASE_URL`: a string do Neon
    - `JWT_SECRET`: gere com `python -c "import secrets; print(secrets.token_urlsafe(48))"`
    - `CORS_ORIGINS`: `https://gabrielgermanoraphael-del.github.io`
-   - `NTFY_TOPIC`: um tópico **novo**, longo e aleatório. Inscreva-se nele no app ntfy.
+   - `NTFY_URL`, `NTFY_TOPIC` e `NTFY_TOKEN`: do servidor ntfy próprio (veja [`ntfy-servidor/`](../ntfy-servidor/README.md)). O token só consegue publicar no tópico `chamados`.
 4. Publique e teste `https://SEU-SERVICO.onrender.com/saude`.
 
    - `GOOGLE_CLIENT_ID`: veja **Login com Google** abaixo
@@ -166,6 +166,7 @@ Os limites dos planos mudam com o tempo; confira nas páginas oficiais antes de 
 - O código de liberação só serve para o TI achar a pessoa; quem libera é sempre um técnico logado.
 - Limite de 10 chamados a cada 10 minutos por professor e 60 por IP (na escola, todos os celulares saem pelo mesmo IP). Repetidos em 2 minutos são unificados.
 - CORS liberado só para a página do QR code.
+- Avisos no celular por servidor ntfy próprio, fechado com login: a API usa um token que só publica, e os técnicos usam senha que só lê.
 - O endpoint público não devolve dados internos (nem detalhes de outros chamados).
 - O limite por IP fica em memória: vale para **uma instância**. Para várias instâncias, troque por Redis.
 - As tabelas são criadas automaticamente na primeira execução (bancos da versão anterior ganham a coluna nova sozinhos). Para mudanças futuras de estrutura, adote o Alembic (migrações).

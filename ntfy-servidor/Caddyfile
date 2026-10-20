@@ -1,0 +1,9 @@
+# Certificado HTTPS (Let's Encrypt) emitido e renovado sozinho para o domínio do .env
+{$DOMINIO} {
+	encode gzip
+	reverse_proxy ntfy:80
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+}
