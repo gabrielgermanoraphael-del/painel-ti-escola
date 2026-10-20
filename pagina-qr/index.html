@@ -1,0 +1,480 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<title>Chamar o TI</title>
+<style>
+  :root { --azul:#1f4e78; --azul-claro:#e8f0f8; --verde:#1e8e4e; --vermelho:#c0392b; --amarelo:#a86b00;
+          --fundo:#f4f6f9; --texto:#1c1c1c; --borda:#d5dde6; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body { margin:0; min-height:100vh; display:flex; justify-content:center; background:var(--fundo);
+         color:var(--texto); font-family:-apple-system, "Segoe UI", Roboto, Arial, sans-serif; padding:16px; }
+  .card { width:100%; max-width:460px; background:#fff; border-radius:20px; padding:24px 18px;
+          box-shadow:0 8px 30px rgba(0,0,0,.08); align-self:flex-start; margin-top:8px; }
+  .topo { text-align:center; }
+  .escola { font-size:13px; letter-spacing:.08em; text-transform:uppercase; color:#666; margin:0; }
+  h1 { font-size:34px; margin:2px 0 4px; color:var(--azul); }
+  .instrucao { color:#555; margin:0 0 18px; font-size:16px; }
+  .opcoes { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .opcao { border:2px solid var(--borda); background:#fff; border-radius:14px; padding:14px 8px;
+           font-size:15px; font-weight:600; color:var(--texto); cursor:pointer; text-align:center;
+           display:flex; flex-direction:column; align-items:center; gap:6px; min-height:92px;
+           justify-content:center; transition:border-color .15s, background .15s; font-family:inherit; }
+  .opcao .ic { font-size:30px; line-height:1; }
+  .opcao.sel { border-color:var(--azul); background:var(--azul-claro); }
+  label { display:block; font-weight:600; margin:18px 0 6px; font-size:15px; }
+  textarea { width:100%; border:2px solid var(--borda); border-radius:12px; padding:10px 12px;
+             font-size:16px; font-family:inherit; resize:vertical; min-height:64px; }
+  textarea:focus { outline:none; border-color:var(--azul); }
+  .enviar { width:100%; border:0; border-radius:14px; padding:20px 16px; margin-top:16px; font-size:21px;
+            font-weight:700; color:#fff; background:var(--azul); cursor:pointer; font-family:inherit; }
+  .enviar.sec { background:#fff; color:var(--azul); border:2px solid var(--azul); font-size:18px; padding:14px; }
+  .enviar:disabled { opacity:.45; cursor:default; }
+  .dica { text-align:center; color:#888; font-size:13px; margin:10px 0 0; }
+  .resultado { text-align:center; padding:12px 0 4px; }
+  .resultado .icone { font-size:60px; line-height:1; margin:6px 0 10px; }
+  .resultado .msg { font-size:21px; font-weight:700; margin:0 0 8px; }
+  .resultado .sub { font-size:16px; color:#555; margin:0; line-height:1.4; }
+  .ok .msg { color:var(--verde); } .erro .msg { color:var(--vermelho); } .aviso .msg { color:var(--amarelo); }
+  .link { background:none; border:0; color:var(--azul); font-size:16px; text-decoration:underline;
+          margin-top:18px; cursor:pointer; font-family:inherit; }
+  .codigo { font:700 40px/1.1 ui-monospace, "SF Mono", Menlo, Consolas, monospace; letter-spacing:.12em;
+            color:var(--azul); background:var(--azul-claro); border:2px dashed var(--azul); border-radius:14px;
+            padding:14px 8px; margin:16px 0 12px; user-select:all; }
+  #botaoGoogle { display:flex; justify-content:center; min-height:44px; margin:18px 0 6px; }
+  .usuario { display:flex; align-items:center; justify-content:center; gap:8px; margin:20px 0 0;
+             font-size:14px; color:#666; flex-wrap:wrap; }
+  .usuario img { width:24px; height:24px; border-radius:50%; }
+  .usuario .link { margin:0; font-size:14px; }
+  .salas { margin:10px 0 0; font-size:15px; color:#555; }
+  .carregando { text-align:center; color:#777; padding:28px 0 12px; font-size:16px; }
+  .confirmar-item { border:2px solid var(--borda); border-radius:14px; padding:12px; margin-top:12px; text-align:left; }
+  .confirmar-item .t { font-weight:700; font-size:16px; margin:0 0 4px; }
+  .confirmar-item .s { font-size:14px; color:#555; margin:0 0 10px; }
+  .confirmar-item .botoes { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .confirmar-item button { border-radius:12px; padding:12px 8px; font-size:15px; font-weight:700; font-family:inherit; cursor:pointer; }
+  .b-sim { border:0; background:var(--verde); color:#fff; }
+  .b-nao { border:2px solid var(--vermelho); background:#fff; color:var(--vermelho); }
+  .confirmar-item textarea { margin-top:10px; min-height:56px; }
+  .confirmar-item .enviar-motivo { width:100%; margin-top:8px; border:0; background:var(--vermelho); color:#fff; }
+  .confirmar-item .feito { font-weight:700; margin:0; }
+  .oculto { display:none !important; }
+</style>
+</head>
+<body>
+<main class="card">
+  <div class="topo">
+    <p class="escola">Tecnologia da escola</p>
+    <h1 id="nomeSala">Sala</h1>
+  </div>
+
+  <!-- abrindo / acordando a API -->
+  <section id="telaCarregando" class="carregando">
+    <p id="carregandoMsg">Carregando...</p>
+  </section>
+
+  <!-- 1. não entrou ainda -->
+  <section id="telaLogin" class="resultado oculto">
+    <div class="icone">🔐</div>
+    <p class="msg">Entre para chamar o TI</p>
+    <p class="sub">Use o seu e-mail institucional<br><b id="dominioTxt">@educ.indaiatuba.sp.gov.br</b></p>
+    <div id="botaoGoogle"></div>
+    <p class="dica" id="loginErro"></p>
+    <p class="dica">Se o botão não aparecer, abra este link no Chrome ou no Safari.</p>
+  </section>
+
+  <!-- 2. primeiro acesso: aguardando o TI -->
+  <section id="telaPendente" class="resultado aviso oculto">
+    <div class="icone">⏳</div>
+    <p class="msg">Falta só liberar o seu acesso</p>
+    <p class="sub">Mostre este código para o TI da escola:</p>
+    <div class="codigo" id="codigoTxt">———</div>
+    <p class="sub">Depois que o TI liberar, toque em atualizar.</p>
+    <button class="enviar sec" id="atualizar" type="button">🔄 Já fui liberado, atualizar</button>
+  </section>
+
+  <!-- 3. bloqueado -->
+  <section id="telaBloqueado" class="resultado erro oculto">
+    <div class="icone">🚫</div>
+    <p class="msg">Seu acesso está bloqueado</p>
+    <p class="sub">Procure o TI da escola.</p>
+  </section>
+
+  <!-- 4. liberado, mas não nesta sala -->
+  <section id="telaSemSala" class="resultado aviso oculto">
+    <div class="icone">🚪</div>
+    <p class="msg" id="semSalaMsg">Você não tem acesso a esta sala</p>
+    <p class="sub">Peça ao TI para incluir esta sala no seu acesso.</p>
+    <p class="salas" id="minhasSalas"></p>
+    <button class="enviar sec" id="atualizar2" type="button">🔄 Atualizar</button>
+  </section>
+
+  <!-- 4b. o TI marcou como resolvido: o professor confirma ou rejeita -->
+  <section id="telaConfirmar" class="resultado oculto">
+    <div class="icone">🔧</div>
+    <p class="msg">O TI resolveu?</p>
+    <p class="sub">O técnico marcou estes pedidos como resolvidos. Confirme ou avise se ainda não funciona.</p>
+    <div id="listaConfirmar"></div>
+    <button class="link" id="pularConfirmar" type="button">Responder depois e fazer um pedido</button>
+  </section>
+
+  <!-- 5. formulário -->
+  <section id="telaForm" class="oculto">
+    <p class="instrucao topo">O que você precisa?</p>
+    <div class="opcoes" id="opcoes"></div>
+
+    <label for="detalhe" id="rotuloDetalhe">Quer explicar melhor? (opcional)</label>
+    <textarea id="detalhe" maxlength="200" placeholder="Ex.: a internet caiu só no meu notebook"></textarea>
+
+    <button class="enviar" id="enviar" type="button" disabled>🔔 Chamar o TI</button>
+    <p class="dica" id="dica">Escolha uma opção acima.</p>
+  </section>
+
+  <section id="telaOk" class="resultado ok oculto">
+    <div class="icone">✅</div>
+    <p class="msg">O TI foi avisado!</p>
+    <p class="sub" id="resumoOk"></p>
+    <button class="link" id="novo" type="button">Fazer outro pedido</button>
+  </section>
+
+  <section id="telaErro" class="resultado erro oculto">
+    <div class="icone">⚠️</div>
+    <p class="msg">Não foi possível chamar.</p>
+    <p class="sub" id="erroMsg">Verifique a internet e tente de novo, ou procure o TI pessoalmente.</p>
+    <button class="enviar" id="tentarDeNovo" type="button">Tentar de novo</button>
+  </section>
+
+  <div class="usuario oculto" id="usuario">
+    <img id="fotoUsuario" alt="" referrerpolicy="no-referrer">
+    <span id="nomeUsuario"></span> ·
+    <button class="link" id="sair" type="button">Sair</button>
+  </div>
+</main>
+
+<script>
+  // ====== CONFIGURAÇÃO ======
+  // Endereço da API de chamados (troque pelo endereço publicado na nuvem, sem "/" no final).
+  // O Client ID do Google e o domínio vêm da própria API (/config/publica).
+  const API_URL = "https://SUA-API-AQUI.onrender.com";
+  const ESPERA_SEGUNDOS = 60;                     // evita o mesmo pedido repetido sem querer
+
+  // Opções que o professor pode escolher: [código, ícone, texto]
+  const OPCOES = [
+    ["internet",  "📶", "Internet / Wi-Fi"],
+    ["chave",     "🔑", "Chave do carrinho de tablets"],
+    ["lousa",     "🖊️", "Lousa digital"],
+    ["projetor",  "📽️", "Projetor"],
+    ["computador","💻", "Computador / notebook"],
+    ["som",       "🔊", "Som"],
+    ["tablet",    "📱", "Tablet de aluno"],
+    ["impressora","🖨️", "Impressora"],
+    ["outro",     "💬", "Outro"],
+  ];
+
+  // Nomes amigáveis enquanto a API não responde
+  const LOCAIS = { "secretaria": "Secretaria", "professores": "Sala dos Professores" };
+  // ==========================
+
+  const $ = id => document.getElementById(id);
+  const TELAS = ["telaCarregando", "telaLogin", "telaPendente", "telaBloqueado", "telaConfirmar", "telaSemSala", "telaForm", "telaOk", "telaErro"];
+  const mostrar = id => TELAS.forEach(t => $(t).classList.toggle("oculto", t !== id));
+
+  const params = new URLSearchParams(location.search);
+  const sala = (params.get("sala") || "").trim().slice(0, 60);
+  let nomeLocal = LOCAIS[sala.toLowerCase()] || (/^\d+$/.test(sala) ? "Sala " + sala : (sala || "Local não informado"));
+  function definirNome(n) { nomeLocal = n; $("nomeSala").textContent = n; document.title = "Chamar o TI – " + n; }
+  definirNome(nomeLocal);
+
+  // ---------- sessão do professor (guardada só neste celular)
+  const memoria = {};
+  const guardar = (k, v) => { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (e) { v === null ? delete memoria[k] : memoria[k] = v; } };
+  const ler = k => { try { return localStorage.getItem(k); } catch (e) { return memoria[k] ?? null; } };
+
+  function tokenValido() {
+    const t = ler("ti_token"), exp = Date.parse(ler("ti_token_expira") || "");
+    return t && exp > Date.now() + 60000 ? t : null;
+  }
+  function sair() {
+    guardar("ti_token", null); guardar("ti_token_expira", null);
+    try { google.accounts.id.disableAutoSelect(); } catch (e) {}
+    $("usuario").classList.add("oculto");
+    mostrarLogin();
+  }
+
+  async function api(caminho, opcoes = {}) {
+    const headers = { "Content-Type": "application/json" };
+    const t = tokenValido();
+    if (t) headers.Authorization = "Bearer " + t;
+    const resp = await fetch(API_URL + caminho, { ...opcoes, headers });
+    let dados = null;
+    try { dados = await resp.json(); } catch (e) {}
+    return { status: resp.status, ok: resp.ok, dados };
+  }
+  const detalheErro = r => (r.dados && typeof r.dados.detail === "string") ? r.dados.detail : "";
+
+  // ---------- login com Google
+  let config = null, gisCarregado = false;
+
+  function carregarGIS() {
+    return new Promise((ok, falha) => {
+      if (window.google && google.accounts) return ok();
+      const s = document.createElement("script");
+      s.src = "https://accounts.google.com/gsi/client"; s.async = true;
+      s.onload = ok; s.onerror = falha;
+      document.head.appendChild(s);
+    });
+  }
+
+  async function mostrarLogin(msgErro = "") {
+    mostrar("telaLogin");
+    $("loginErro").textContent = msgErro;
+    if (gisCarregado) return;
+    try {
+      await carregarGIS();
+      google.accounts.id.initialize({
+        client_id: config.google_client_id,
+        callback: aoEntrarComGoogle,
+        hd: config.dominio,            // sugere a conta institucional (a API confere de verdade)
+        ux_mode: "popup",
+        auto_select: true,
+        cancel_on_tap_outside: false,
+      });
+      google.accounts.id.renderButton($("botaoGoogle"), {
+        theme: "filled_blue", size: "large", shape: "pill", text: "signin_with", locale: "pt-BR",
+        width: Math.min(300, $("botaoGoogle").clientWidth || 300),
+      });
+      gisCarregado = true;
+    } catch (e) {
+      $("loginErro").textContent = "Não foi possível carregar o login do Google. Verifique a internet ou abra no Chrome/Safari.";
+    }
+  }
+
+  async function aoEntrarComGoogle(resposta) {
+    $("loginErro").textContent = "Entrando...";
+    try {
+      const r = await fetch(API_URL + "/auth/google", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ credential: resposta.credential }),
+      });
+      const dados = await r.json().catch(() => null);
+      if (!r.ok) {
+        try { google.accounts.id.disableAutoSelect(); } catch (e) {}
+        return mostrarLogin((dados && dados.detail) || "Não foi possível entrar. Tente de novo.");
+      }
+      guardar("ti_token", dados.access_token);
+      guardar("ti_token_expira", dados.expira_em);
+      $("loginErro").textContent = "";
+      aplicarSituacao(dados.pessoa);
+    } catch (e) {
+      mostrarLogin("Sem conexão com o sistema. Verifique a internet.");
+    }
+  }
+
+  // ---------- o que mostrar para cada situação
+  const temAcesso = p => p.status === "ativo" &&
+    (p.todas_salas || p.salas.some(s => s.codigo.toLowerCase() === sala.toLowerCase()));
+
+  // ---------- confirmação dos chamados resolvidos
+  let pularConfirmacao = false, pessoaAtual = null, faltamResponder = 0;
+
+  async function chamadosParaConfirmar() {
+    try {
+      const r = await api("/professor/chamados");
+      return r.ok ? r.dados.filter(c => c.status === "confirmacao") : [];
+    } catch (e) { return []; }
+  }
+
+  function itemConfirmar(c) {
+    const box = document.createElement("div"); box.className = "confirmar-item";
+    const t = document.createElement("p"); t.className = "t"; t.textContent = `${c.tipo_nome} – ${c.local} (nº ${c.id})`;
+    const s = document.createElement("p"); s.className = "s";
+    s.textContent = (c.atendido_por ? c.atendido_por + ": " : "") + (c.solucao || "marcado como resolvido");
+    const botoes = document.createElement("div"); botoes.className = "botoes";
+    const sim = document.createElement("button"); sim.type = "button"; sim.className = "b-sim"; sim.textContent = "✅ Sim, resolvido";
+    const nao = document.createElement("button"); nao.type = "button"; nao.className = "b-nao"; nao.textContent = "❌ Ainda não";
+    botoes.append(sim, nao); box.append(t, s, botoes);
+    const concluir = (texto) => {
+      box.replaceChildren(t); const f = document.createElement("p"); f.className = "feito"; f.textContent = texto; box.append(f);
+      if (--faltamResponder === 0) setTimeout(() => aplicarSituacao(pessoaAtual), 1500);
+    };
+    sim.addEventListener("click", async () => {
+      sim.disabled = nao.disabled = true;
+      const r = await api(`/professor/chamados/${c.id}/confirmar`, { method: "POST" }).catch(() => ({ ok: false }));
+      if (r.ok || r.status === 409) concluir("👍 Obrigado! Chamado concluído.");
+      else { sim.disabled = nao.disabled = false; s.textContent = "Não consegui enviar. Tente de novo."; }
+    });
+    nao.addEventListener("click", () => {
+      botoes.remove();
+      const ta = document.createElement("textarea"); ta.maxLength = 300; ta.placeholder = "O que ainda não está funcionando?";
+      const env = document.createElement("button"); env.type = "button"; env.className = "enviar-motivo"; env.textContent = "Avisar o TI"; env.disabled = true;
+      ta.addEventListener("input", () => { env.disabled = ta.value.trim().length < 3; });
+      env.addEventListener("click", async () => {
+        env.disabled = true; env.textContent = "Enviando...";
+        const r = await api(`/professor/chamados/${c.id}/rejeitar`, { method: "POST", body: JSON.stringify({ motivo: ta.value.trim() }) })
+          .catch(() => ({ ok: false }));
+        if (r.ok || r.status === 409) concluir("O TI foi avisado e vai voltar para resolver.");
+        else { env.disabled = false; env.textContent = "Avisar o TI"; s.textContent = "Não consegui enviar. Tente de novo."; }
+      });
+      box.append(ta, env); ta.focus();
+    });
+    return box;
+  }
+
+  async function aplicarSituacao(p) {
+    pessoaAtual = p;
+    $("nomeUsuario").textContent = p.nome;
+    $("fotoUsuario").src = p.foto || "";
+    $("fotoUsuario").classList.toggle("oculto", !p.foto);
+    $("usuario").classList.remove("oculto");
+
+    if (p.status === "pendente") { $("codigoTxt").textContent = p.codigo; return mostrar("telaPendente"); }
+    if (p.status === "bloqueado") return mostrar("telaBloqueado");
+    if (!pularConfirmacao) {
+      const lista = await chamadosParaConfirmar();
+      if (lista.length) {
+        faltamResponder = lista.length;
+        $("listaConfirmar").replaceChildren(...lista.map(itemConfirmar));
+        return mostrar("telaConfirmar");
+      }
+    }
+    if (!temAcesso(p)) {
+      $("semSalaMsg").textContent = "Você não tem acesso a " + nomeLocal;
+      $("minhasSalas").textContent = p.salas.length ? "Suas salas: " + p.salas.map(s => s.nome).join(", ") : "";
+      return mostrar("telaSemSala");
+    }
+    mostrar("telaForm");
+  }
+
+  async function atualizarSituacao() {
+    if (!tokenValido()) return mostrarLogin();
+    try {
+      const r = await api("/professor/eu");
+      if (r.status === 401) return sair();
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      await aplicarSituacao(r.dados);
+    } catch (e) {
+      $("erroMsg").textContent = "Sem conexão com o sistema. Verifique a internet e tente de novo.";
+      mostrar("telaErro");
+    }
+  }
+
+  // ---------- formulário
+  let escolhida = null;
+  const grade = $("opcoes");
+  OPCOES.forEach(([codigo, icone, texto]) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "opcao";
+    b.dataset.codigo = codigo;
+    b.innerHTML = `<span class="ic">${icone}</span><span>${texto}</span>`;
+    if (codigo === "outro") b.style.gridColumn = "1 / -1";
+    b.addEventListener("click", () => {
+      escolhida = OPCOES.find(o => o[0] === codigo);
+      grade.querySelectorAll(".opcao").forEach(x => x.classList.toggle("sel", x === b));
+      atualizarBotao();
+      if (codigo === "outro") $("detalhe").focus();
+    });
+    grade.appendChild(b);
+  });
+
+  function atualizarBotao() {
+    const precisaDetalhe = escolhida && escolhida[0] === "outro";
+    const temDetalhe = $("detalhe").value.trim().length > 0;
+    $("rotuloDetalhe").textContent = precisaDetalhe ? "Descreva o que você precisa:" : "Quer explicar melhor? (opcional)";
+    $("enviar").disabled = !escolhida || (precisaDetalhe && !temDetalhe);
+    $("dica").textContent = !escolhida ? "Escolha uma opção acima."
+      : (precisaDetalhe && !temDetalhe ? "Escreva o que você precisa." : "Pronto, é só apertar o botão.");
+  }
+  $("detalhe").addEventListener("input", atualizarBotao);
+
+  function chamadoRecente(chave) {
+    try { return Date.now() - Number(localStorage.getItem(chave) || 0) < ESPERA_SEGUNDOS * 1000; }
+    catch (e) { return false; }
+  }
+
+  async function enviar() {
+    if (!escolhida) return;
+    const [codigo, icone, texto] = escolhida;
+    const detalhe = $("detalhe").value.trim();
+    const chave = "chamado_" + sala + "_" + codigo;
+    $("resumoOk").textContent = `${icone} ${texto} – ${nomeLocal}. Já estamos indo!`;
+
+    if (chamadoRecente(chave)) { mostrar("telaOk"); return; }
+
+    const botao = $("enviar");
+    botao.disabled = true;
+    botao.textContent = "Chamando...";
+    $("erroMsg").textContent = "Verifique a internet e tente de novo, ou procure o TI pessoalmente.";
+    try {
+      const r = await api("/chamados", { method: "POST", body: JSON.stringify({ sala, tipo: codigo, detalhe }) });
+      if (r.status === 401) { sair(); return; }
+      if (r.status === 403) { await atualizarSituacao(); return; }  // acesso mudou: mostra a situação atual
+      if (r.status === 404) {
+        $("erroMsg").textContent = "Esta sala não está cadastrada no sistema. Procure o TI pessoalmente.";
+        throw new Error("sala");
+      }
+      if (r.status === 429) {
+        $("erroMsg").textContent = detalheErro(r) || "Muitos chamados em pouco tempo. Aguarde alguns minutos.";
+        throw new Error("limite");
+      }
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      $("resumoOk").textContent = `${icone} ${texto} – ${nomeLocal}. Chamado nº ${r.dados.id}. Já estamos indo!`;
+      try { localStorage.setItem(chave, String(Date.now())); } catch (e) {}
+      mostrar("telaOk");
+    } catch (e) {
+      mostrar("telaErro");
+    } finally {
+      botao.textContent = "🔔 Chamar o TI";
+      atualizarBotao();
+    }
+  }
+
+  $("enviar").addEventListener("click", enviar);
+  $("tentarDeNovo").addEventListener("click", () => { escolhida ? enviar() : iniciar(); });
+  $("atualizar").addEventListener("click", atualizarSituacao);
+  $("atualizar2").addEventListener("click", atualizarSituacao);
+  $("sair").addEventListener("click", sair);
+  $("pularConfirmar").addEventListener("click", () => { pularConfirmacao = true; aplicarSituacao(pessoaAtual); });
+  $("novo").addEventListener("click", () => {
+    escolhida = null;
+    $("detalhe").value = "";
+    grade.querySelectorAll(".opcao").forEach(x => x.classList.remove("sel"));
+    atualizarBotao();
+    mostrar("telaForm");
+  });
+
+  // ---------- início
+  async function iniciar() {
+    mostrar("telaCarregando");
+    // No plano gratuito a API pode estar "dormindo": avisa se demorar
+    const lento = setTimeout(() => { $("carregandoMsg").textContent = "Conectando ao sistema... pode levar até 1 minuto."; }, 4000);
+    try {
+      const [rc, rl] = await Promise.all([
+        fetch(API_URL + "/config/publica").then(r => r.json()),
+        fetch(API_URL + "/locais/publico/" + encodeURIComponent(sala || "-")),
+      ]);
+      config = rc;
+      $("dominioTxt").textContent = "@" + config.dominio;
+      if (rl.status === 404) {
+        $("erroMsg").textContent = "Esta sala não está cadastrada no sistema. Procure o TI pessoalmente.";
+        return mostrar("telaErro");
+      }
+      if (rl.ok) definirNome((await rl.json()).nome);
+      if (!config.google_client_id) {
+        $("erroMsg").textContent = "O login ainda não foi configurado pelo TI.";
+        return mostrar("telaErro");
+      }
+      await atualizarSituacao();
+    } catch (e) {
+      $("erroMsg").textContent = "Sem conexão com o sistema. Verifique a internet e tente de novo.";
+      mostrar("telaErro");
+    } finally {
+      clearTimeout(lento);
+    }
+  }
+  iniciar();
+</script>
+</body>
+</html>

@@ -40,6 +40,9 @@ class Config:
     DOMINIO_PERMITIDO: str = os.getenv("DOMINIO_PERMITIDO", "educ.indaiatuba.sp.gov.br").lower()
     PROFESSOR_TOKEN_DIAS: int = int(os.getenv("PROFESSOR_TOKEN_DIAS", "30"))
 
+    # O professor confirma se o chamado foi resolvido; sem resposta nesse prazo, confirma sozinho
+    CONFIRMACAO_HORAS: int = int(os.getenv("CONFIRMACAO_HORAS", "48"))
+
     # Fuso usado nas estatísticas por dia
     FUSO: str = os.getenv("FUSO", "America/Sao_Paulo")
 

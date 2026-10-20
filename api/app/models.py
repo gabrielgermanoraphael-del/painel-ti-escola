@@ -22,7 +22,8 @@ TIPOS = {
     "impressora": "Impressora",
     "outro": "Outro",
 }
-STATUS = ("aberto", "atendimento", "resolvido")
+# confirmacao = o técnico resolveu e espera o professor confirmar (ou rejeitar)
+STATUS = ("aberto", "atendimento", "confirmacao", "resolvido")
 
 
 class Local(Base):
@@ -88,7 +89,9 @@ class Chamado(Base):
     criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=agora, index=True)
     atendido_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     resolvido_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    confirmado_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     solucao: Mapped[str] = mapped_column(Text, default="")
+    rejeicao: Mapped[str] = mapped_column(Text, default="")  # motivo da última rejeição do professor
     atendido_por_id: Mapped[int | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True)
     aberto_por_id: Mapped[int | None] = mapped_column(ForeignKey("pessoas.id"), nullable=True)
 
@@ -97,7 +100,7 @@ class Chamado(Base):
     aberto_por: Mapped["Pessoa | None"] = relationship(lazy="joined")
 
 
-ACOES = ("aberto", "registrado", "assumido", "transferido", "resolvido", "reaberto")
+ACOES = ("aberto", "registrado", "assumido", "transferido", "resolvido", "confirmado", "rejeitado", "reaberto")
 
 
 class Evento(Base):

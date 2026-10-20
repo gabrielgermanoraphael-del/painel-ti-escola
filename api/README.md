@@ -35,6 +35,9 @@ Documentação interativa em **`/docs`** depois que a API estiver no ar.
 | POST | `/auth/google` | público | Login do professor com o token do Google. Primeiro acesso: fica **pendente** e recebe um código |
 | GET | `/professor/eu` | professor | Situação do professor: pendente, liberado (com as salas) ou bloqueado |
 | POST | `/chamados` | professor liberado | Abre um chamado (`sala`, `tipo`, `detalhe`), só nas salas liberadas |
+| GET | `/professor/chamados` | professor | Chamados do próprio professor (30 dias); os `confirmacao` esperam a resposta dele |
+| POST | `/professor/chamados/{id}/confirmar` | professor | Confirma que o problema foi resolvido |
+| POST | `/professor/chamados/{id}/rejeitar` | professor | Recusa a solução com o `motivo`: volta para o mesmo técnico, que é avisado |
 | POST | `/auth/login` | público | Login do técnico (devolve um token) |
 | GET | `/pessoas?status=` | técnico | Professores que já entraram (pendentes, liberados, bloqueados) |
 | GET | `/pessoas/codigo/{codigo}` | técnico | Acha o professor pelo código que apareceu no celular dele |
@@ -43,9 +46,9 @@ Documentação interativa em **`/docs`** depois que a API estiver no ar.
 | GET | `/chamados/{id}` | técnico | Detalhe de um chamado |
 | POST | `/chamados/manual` | técnico | Registra um pedido feito pessoalmente |
 | POST | `/chamados/{id}/assumir` | técnico | Assume o chamado (registra quem e quando) e avisa a equipe. Se outro técnico já assumiu, devolve 409; com `?transferir=true` passa para você |
-| POST | `/chamados/{id}/resolver` | técnico | Marca "Resolvido", com a solução. Só quem assumiu (ou um administrador) resolve |
+| POST | `/chamados/{id}/resolver` | técnico | Registra a solução. Só quem assumiu (ou um administrador) resolve. Chamado aberto por professor fica `confirmacao` até ele confirmar (ou 48 h sem resposta); chamado manual termina direto |
 | POST | `/chamados/{id}/reabrir` | técnico | Volta para "Aberto", sem ninguém assumido |
-| GET | `/chamados/{id}/registro` | técnico | Linha do tempo: aberto, registrado, assumido, transferido, resolvido, reaberto (quem e quando) |
+| GET | `/chamados/{id}/registro` | técnico | Linha do tempo: aberto, registrado, assumido, transferido, resolvido, confirmado, rejeitado, reaberto (quem e quando) |
 | GET | `/estatisticas?dias=30` | técnico | Totais, tempo médio, por tipo, por local e por dia |
 | GET | `/locais` | técnico | Salas cadastradas |
 | POST/PATCH | `/locais` | admin | Cadastra ou desativa salas |
@@ -67,6 +70,16 @@ Documentação interativa em **`/docs`** depois que a API estiver no ar.
 3. No painel, página **Professores**, o TI digita o código, marca as salas em que ele dá aula (ou "todas as salas", para coordenação e direção) e clica em **Liberar acesso**.
 4. O professor toca em **Já fui liberado, atualizar** e já pode chamar. Ele fica conectado no celular por 30 dias.
 
+### Confirmação pelo professor
+
+Quando o técnico resolve um chamado aberto por um professor, o chamado fica **"Aguardando professor"**. Na próxima vez que o professor abrir qualquer QR, a página pergunta **"O TI resolveu?"**:
+
+- **Sim, resolvido** → o chamado é concluído.
+- **Ainda não** → o professor escreve o motivo; o chamado volta para o mesmo técnico, o motivo aparece no painel e o celular do técnico recebe um aviso.
+- Sem resposta em **48 horas** (`CONFIRMACAO_HORAS`), o chamado se confirma sozinho.
+
+As recusas aparecem nas estatísticas: medem a qualidade do atendimento pelo olhar de quem pediu.
+
 Se o professor abrir o QR de uma sala que não é dele, a página avisa e mostra as salas liberadas. Bloquear alguém no painel corta o acesso na hora.
 
 Tipos aceitos: `internet`, `chave`, `lousa`, `projetor`, `computador`, `som`, `tablet`, `impressora`, `outro`.
@@ -86,7 +99,7 @@ python -m uvicorn app.main:app --reload
 
 Sem `DATABASE_URL`, usa um SQLite local (`chamados_dev.db`). Abra http://127.0.0.1:8000/docs.
 
-Testes (27 cenários, incluindo login Google simulado, permissões por sala, segurança e limites):
+Testes (30 cenários, incluindo login Google simulado, permissões por sala, segurança e limites):
 
 ```bash
 python -m unittest -v                                     # SQLite

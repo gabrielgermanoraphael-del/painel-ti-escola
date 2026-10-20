@@ -25,7 +25,8 @@ ICONE_TIPO = {"internet": "📶", "chave": "🔑", "lousa": "🖊️", "projetor
 TIPOS = {"internet": "Internet / Wi-Fi", "chave": "Chave do carrinho de tablets", "lousa": "Lousa digital",
          "projetor": "Projetor", "computador": "Computador / notebook", "som": "Som",
          "tablet": "Tablet de aluno", "impressora": "Impressora", "outro": "Outro"}
-STATUS = {"aberto": "🔴 Aberto", "atendimento": "🟡 Assumido", "resolvido": "🟢 Resolvido"}
+STATUS = {"aberto": "🔴 Aberto", "atendimento": "🟡 Assumido", "confirmacao": "🔵 Aguardando professor",
+          "resolvido": "🟢 Resolvido"}
 
 
 def acao(metodo, caminho, corpo=None, params=None, aviso=None):
@@ -40,14 +41,16 @@ def acao(metodo, caminho, corpo=None, params=None, aviso=None):
 
 
 ACOES = {"aberto": "📲 Aberto", "registrado": "📝 Registrado", "assumido": "✋ Assumido", "transferido": "↪ Transferido",
-         "resolvido": "✅ Resolvido", "reaberto": "↩️ Reaberto"}
+         "resolvido": "✅ Resolvido pelo TI", "confirmado": "👍 Confirmado", "rejeitado": "❌ Rejeitado pelo professor",
+         "reaberto": "↩️ Reaberto"}
 
 
 def para_df(lista):
     df = pd.DataFrame(lista, columns=["id", "local_id", "local", "tipo", "tipo_nome", "detalhe", "status", "origem",
                                       "criado_em", "atendido_em", "resolvido_em", "solucao", "atendido_por",
-                                      "aberto_por"])
-    for c in ("criado_em", "atendido_em", "resolvido_em"):
+                                      "aberto_por", "confirmado_em", "rejeicao"])
+    df["rejeicao"] = df["rejeicao"].fillna("")
+    for c in ("criado_em", "atendido_em", "resolvido_em", "confirmado_em"):
         df[c] = pd.to_datetime(df[c], utc=True, errors="coerce").dt.tz_convert(FUSO).dt.tz_localize(None)
     return df
 
@@ -94,7 +97,7 @@ exigir_configuracao()
 def bloco_ativos():
     try:
         ativos = para_df(api("GET", "/chamados", params={"status": ["aberto", "atendimento"], "limite": 200}))
-        resolvidos = para_df(api("GET", "/chamados", params={"status": "resolvido",
+        resolvidos = para_df(api("GET", "/chamados", params={"status": ["resolvido", "confirmacao"],
                                                              "desde": desde(2),
                                                              "limite": 500}))
     except ErroAPI as e:
@@ -109,11 +112,21 @@ def bloco_ativos():
             st.toast(f"🔔 Novo chamado: **{c['local']}** – {c['tipo_nome']}", icon="🔔")
     st.session_state["vistos"] = ids | (vistos or set())
 
-    m1, m2, m3, m4 = st.columns(4)
+    esperando = resolvidos[resolvidos["status"] == "confirmacao"]
+    m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("🔴 Abertos", int((ativos["status"] == "aberto").sum()))
     m2.metric("🟡 Assumidos", int((ativos["status"] == "atendimento").sum()))
-    m3.metric("🟢 Resolvidos hoje", int((resolvidos["resolvido_em"] >= hoje_local()).sum()))
-    m4.metric("Atualizado", datetime.now().strftime("%H:%M:%S"))
+    m3.metric("🔵 Aguardando professor", len(esperando))
+    m4.metric("🟢 Resolvidos hoje", int((resolvidos["resolvido_em"] >= hoje_local()).sum()))
+    m5.metric("Atualizado", datetime.now().strftime("%H:%M:%S"))
+
+    if not esperando.empty:
+        with st.expander(f"🔵 Aguardando o professor confirmar ({len(esperando)})"):
+            st.caption("O professor confirma ou rejeita pela página do QR. Sem resposta, confirma sozinho depois do prazo.")
+            for _, c in esperando.sort_values("resolvido_em").iterrows():
+                st.markdown(f"**nº {c['id']} · {c['local']} — {c['tipo_nome']}** · resolvido por {c['atendido_por'] or '—'} "
+                            f"{ha_quanto(c['resolvido_em'])} · aberto por {c['aberto_por'] or '—'}"
+                            + (f"  \n✅ {c['solucao']}" if c["solucao"] else ""))
 
     if ativos.empty:
         st.success("Nenhum chamado pendente. 🎉")
@@ -134,6 +147,8 @@ def bloco_ativos():
             col_info.caption(linha)
             if c["detalhe"]:
                 col_info.write(f"💬 {c['detalhe']}")
+            if c["rejeicao"]:
+                col_info.warning(f"❌ {c['aberto_por'] or 'O professor'} disse que ainda não resolveu: {c['rejeicao']}")
 
             eu = st.session_state.get("nome")
             de_outro = c["status"] == "atendimento" and c["atendido_por"] not in (None, eu)
@@ -204,7 +219,7 @@ with aba_hist:
         })
         st.dataframe(tabela, hide_index=True, use_container_width=True)
 
-        res = filt[filt["status"] == "resolvido"]
+        res = filt[filt["status"].isin(["resolvido", "confirmacao"])]
         if not res.empty:
             with st.expander("↩️ Reabrir um chamado resolvido"):
                 opcoes = {f"nº {r.id} – {r.criado_em:%d/%m %H:%M} – {r.local} – {r.tipo_nome}": r.id
@@ -238,9 +253,11 @@ with aba_stats:
         e = None
         st.error(str(err))
     if e and e["total"]:
-        s1, s2, s3 = st.columns(3)
+        s1, s2, s3, s4 = st.columns(4)
         s1.metric("Chamados no período", e["total"])
         s2.metric("Resolvidos", e["resolvidos"])
+        s4.metric("Rejeitados pelo professor", e.get("rejeicoes", 0),
+                  help="Vezes em que o professor disse que o problema não tinha sido resolvido")
         s3.metric("Tempo médio até resolver",
                   f"{e['tempo_medio_resolucao_min']:.0f} min" if e["tempo_medio_resolucao_min"] is not None else "—")
         g1, g2 = st.columns(2)

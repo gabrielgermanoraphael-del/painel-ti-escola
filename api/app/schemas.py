@@ -100,6 +100,8 @@ class ChamadoOut(BaseModel):
     atendido_por: str | None
     aberto_por: str | None = None
     aberto_por_email: str | None = None
+    confirmado_em: datetime | None = None
+    rejeicao: str = ""
 
     @classmethod
     def de(cls, c) -> "ChamadoOut":
@@ -110,6 +112,7 @@ class ChamadoOut(BaseModel):
             atendido_por=c.atendido_por.nome if c.atendido_por else None,
             aberto_por=c.aberto_por.nome if c.aberto_por else None,
             aberto_por_email=c.aberto_por.email if c.aberto_por else None,
+            confirmado_em=_utc(c.confirmado_em), rejeicao=c.rejeicao or "",
         )
 
 
@@ -125,12 +128,46 @@ class EventoOut(BaseModel):
         return cls(quando=_utc(e.quando), acao=e.acao, quem=quem, detalhe=e.detalhe or "")
 
 
+class MeuChamado(BaseModel):
+    """O que o professor vê dos chamados que ele abriu."""
+    id: int
+    local: str
+    tipo: str
+    tipo_nome: str
+    detalhe: str
+    status: str
+    criado_em: datetime
+    resolvido_em: datetime | None
+    solucao: str
+    atendido_por: str | None
+
+    @classmethod
+    def de(cls, c) -> "MeuChamado":
+        return cls(id=c.id, local=c.local.nome, tipo=c.tipo, tipo_nome=TIPOS.get(c.tipo, c.tipo), detalhe=c.detalhe or "",
+                   status=c.status, criado_em=_utc(c.criado_em), resolvido_em=_utc(c.resolvido_em),
+                   solucao=c.solucao or "", atendido_por=c.atendido_por.nome if c.atendido_por else None)
+
+
+class Rejeicao(BaseModel):
+    motivo: str = Field(min_length=3, max_length=300, description="O que ainda não está funcionando")
+
+    @field_validator("motivo")
+    @classmethod
+    def limpa(cls, v: str) -> str:
+        v = " ".join(v.split())
+        if len(v) < 3:
+            raise ValueError("Conte em poucas palavras o que ainda não funciona")
+        return v
+
+
 class Estatisticas(BaseModel):
     dias: int
     total: int
     abertos: int
     em_atendimento: int
     resolvidos: int
+    aguardando_confirmacao: int = 0
+    rejeicoes: int = 0
     tempo_medio_resolucao_min: float | None
     por_tipo: dict[str, int]
     por_local: dict[str, int]

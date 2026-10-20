@@ -167,7 +167,8 @@ class TesteAPI(unittest.TestCase):
         self.assertIsNotNone(c["atendido_em"])
 
         c = self.cli.post(f"/chamados/{id_}/resolver", json={"solucao": "Calibrei o PointWrite"}, headers=h).json()
-        self.assertEqual((c["status"], c["solucao"]), ("resolvido", "Calibrei o PointWrite"))
+        # aberto por professor: espera a confirmação dele
+        self.assertEqual((c["status"], c["solucao"]), ("confirmacao", "Calibrei o PointWrite"))
         self.assertTrue(c["resolvido_em"].endswith(("+00:00", "Z")))
 
         self.assertEqual(self.cli.post(f"/chamados/{id_}/assumir", headers=h).status_code, 409)
@@ -265,7 +266,7 @@ class TesteAPI(unittest.TestCase):
         c = self.cli.post(f"/chamados/{id_}/assumir", params={"transferir": "true"}, headers=joao).json()
         self.assertEqual(c["atendido_por"], "João")
         c = self.cli.post(f"/chamados/{id_}/resolver", json={"solucao": "Religuei a caixa"}, headers=joao).json()
-        self.assertEqual(c["status"], "resolvido")
+        self.assertEqual(c["status"], "confirmacao")
         self.assertEqual(self.cli.post(f"/chamados/{id_}/resolver", json={}, headers=joao).status_code, 409)
         # reabrir libera para qualquer um assumir
         c = self.cli.post(f"/chamados/{id_}/reabrir", headers=gabriel).json()
@@ -282,16 +283,96 @@ class TesteAPI(unittest.TestCase):
         h = self.token()
         id_ = self.abrir({"sala": "6", "tipo": "lousa"}).json()["id"]
         c = self.cli.post(f"/chamados/{id_}/resolver", json={"solucao": "Calibrei"}, headers=h).json()
-        self.assertEqual((c["status"], c["atendido_por"]), ("resolvido", "Gabriel"))
+        self.assertEqual((c["status"], c["atendido_por"]), ("confirmacao", "Gabriel"))
         self.assertIsNotNone(c["atendido_em"])
         acoes = [e["acao"] for e in self.cli.get(f"/chamados/{id_}/registro", headers=h).json()]
         self.assertEqual(acoes, ["aberto", "assumido", "resolvido"])
         # manual também entra no registro, e /atender (painel antigo) ainda funciona
         locais = {l["nome"]: l["id"] for l in self.cli.get("/locais", headers=h).json()}
         m = self.cli.post("/chamados/manual", json={"local_id": locais["Secretaria"], "tipo": "impressora"}, headers=h).json()
+        # chamado manual não tem professor para confirmar: resolve direto
+        m2 = self.cli.post("/chamados/manual", json={"local_id": locais["Sala 1"], "tipo": "som"}, headers=h).json()
+        r = self.cli.post(f"/chamados/{m2['id']}/resolver", json={"solucao": "ok"}, headers=h).json()
+        self.assertEqual(r["status"], "resolvido")
+        self.assertIsNotNone(r["confirmado_em"])
         self.assertEqual(self.cli.post(f"/chamados/{m['id']}/atender", headers=h).json()["status"], "atendimento")
         self.assertEqual([e["acao"] for e in self.cli.get(f"/chamados/{m['id']}/registro", headers=h).json()],
                          ["registrado", "assumido"])
+
+
+
+    # ---------------- confirmação pelo professor
+    def _resolvido_pelo_ti(self, sala="3", tipo="projetor"):
+        h = self.token()
+        id_ = self.abrir({"sala": sala, "tipo": tipo}).json()["id"]
+        self.cli.post(f"/chamados/{id_}/assumir", headers=h)
+        self.cli.post(f"/chamados/{id_}/resolver", json={"solucao": "Troquei o cabo HDMI"}, headers=h)
+        return id_, h
+
+    def test_professor_confirma(self):
+        id_, h = self._resolvido_pelo_ti()
+        meus = self.cli.get("/professor/chamados", headers=self.prof).json()
+        self.assertEqual([(c["id"], c["status"], c["solucao"], c["atendido_por"]) for c in meus],
+                         [(id_, "confirmacao", "Troquei o cabo HDMI", "Gabriel")])
+        # o painel ainda conta como resolvido nas estatísticas, mas mostra que espera o professor
+        e = self.cli.get("/estatisticas", headers=h).json()
+        self.assertEqual((e["resolvidos"], e["aguardando_confirmacao"]), (1, 1))
+        r = self.cli.post(f"/professor/chamados/{id_}/confirmar", headers=self.prof)
+        self.assertEqual(r.json()["status"], "resolvido")
+        self.assertEqual(self.cli.post(f"/professor/chamados/{id_}/confirmar", headers=self.prof).status_code, 409)
+        c = self.cli.get(f"/chamados/{id_}", headers=h).json()
+        self.assertIsNotNone(c["confirmado_em"])
+        acoes = [(e["acao"], e["quem"]) for e in self.cli.get(f"/chamados/{id_}/registro", headers=h).json()]
+        self.assertEqual(acoes[-1], ("confirmado", "Ana Prof"))
+
+    def test_professor_rejeita_e_volta_para_o_tecnico(self):
+        id_, h = self._resolvido_pelo_ti("5", "lousa")
+        ENVIADOS.clear()
+        self.assertEqual(self.cli.post(f"/professor/chamados/{id_}/rejeitar", json={"motivo": "  "},
+                                       headers=self.prof).status_code, 422)
+        r = self.cli.post(f"/professor/chamados/{id_}/rejeitar", json={"motivo": "Caneta  continua sem responder"},
+                          headers=self.prof).json()
+        self.assertEqual(r["status"], "atendimento")
+        c = self.cli.get(f"/chamados/{id_}", headers=h).json()
+        self.assertEqual((c["status"], c["atendido_por"], c["rejeicao"], c["resolvido_em"]),
+                         ("atendimento", "Gabriel", "Caneta continua sem responder", None))
+        self.assertEqual(ENVIADOS[0][0], "❌ Não resolveu: Sala 5 (Gabriel)")
+        self.assertIn("Ana Prof: Caneta continua sem responder", ENVIADOS[0][1])
+        self.assertEqual(self.cli.get("/estatisticas", headers=h).json()["rejeicoes"], 1)
+        # o técnico resolve de novo; a rejeição anterior sai do card
+        c = self.cli.post(f"/chamados/{id_}/resolver", json={"solucao": "Troquei a pilha"}, headers=h).json()
+        self.assertEqual((c["status"], c["rejeicao"]), ("confirmacao", ""))
+        self.assertEqual([e["acao"] for e in self.cli.get(f"/chamados/{id_}/registro", headers=h).json()],
+                         ["aberto", "assumido", "resolvido", "rejeitado", "resolvido"])
+
+    def test_confirmacao_so_do_proprio_professor_e_automatica_no_prazo(self):
+        id_, h = self._resolvido_pelo_ti()
+        with SessionLocal() as db:
+            outra = Pessoa(google_sub="g-bia", email="bia@educ.indaiatuba.sp.gov.br", nome="Bia", codigo="BBB-BBB",
+                           status="ativo", todas_salas=True)
+            db.add(outra)
+            db.commit()
+            hb = {"Authorization": "Bearer " + criar_token_professor(outra)[0]}
+        self.assertEqual(self.cli.post(f"/professor/chamados/{id_}/confirmar", headers=hb).status_code, 404)
+        self.assertEqual(self.cli.post(f"/professor/chamados/{id_}/rejeitar", json={"motivo": "não"},
+                                       headers=hb).status_code, 404)
+        self.assertEqual(self.cli.get("/professor/chamados", headers=hb).json(), [])
+        self.assertEqual(self.cli.post(f"/professor/chamados/{id_}/confirmar", headers=h).status_code, 401)
+        # sem resposta além do prazo: confirma sozinho na próxima consulta
+        with SessionLocal() as db:
+            c = db.get(Chamado, id_)
+            c.resolvido_em = agora() - timedelta(hours=main.config.CONFIRMACAO_HORAS + 1)
+            db.commit()
+        lista = self.cli.get("/chamados", headers=h).json()
+        self.assertEqual([c["status"] for c in lista if c["id"] == id_], ["resolvido"])
+        reg = self.cli.get(f"/chamados/{id_}/registro", headers=h).json()
+        self.assertEqual((reg[-1]["acao"], reg[-1]["quem"]), ("confirmado", ""))
+        self.assertIn("automático", reg[-1]["detalhe"])
+        # chamado em confirmação não pode ser assumido nem resolvido de novo, mas pode ser reaberto
+        id2, _ = self._resolvido_pelo_ti("6", "som")
+        self.assertEqual(self.cli.post(f"/chamados/{id2}/assumir", headers=h).status_code, 409)
+        self.assertEqual(self.cli.post(f"/chamados/{id2}/resolver", json={}, headers=h).status_code, 409)
+        self.assertEqual(self.cli.post(f"/chamados/{id2}/reabrir", headers=h).json()["status"], "aberto")
 
 
 if __name__ == "__main__":

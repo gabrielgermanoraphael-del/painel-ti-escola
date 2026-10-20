@@ -33,12 +33,22 @@ from .seed import semear_locais
 logging.basicConfig(level=logging.INFO)
 
 
+COLUNAS_NOVAS = {  # colunas acrescentadas depois da primeira versão do banco
+    "aberto_por_id": "INTEGER REFERENCES pessoas(id)",
+    "confirmado_em": "TIMESTAMP WITH TIME ZONE",
+    "rejeicao": "TEXT DEFAULT ''",
+}
+
+
 def _migrar_colunas():
-    """Bancos criados antes do login Google não têm a coluna chamados.aberto_por_id."""
+    """Bancos de versões anteriores ganham as colunas novas de chamados."""
     colunas = {c["name"] for c in inspect(engine).get_columns("chamados")}
-    if "aberto_por_id" not in colunas:
-        with engine.begin() as con:
-            con.execute(text("ALTER TABLE chamados ADD COLUMN aberto_por_id INTEGER REFERENCES pessoas(id)"))
+    with engine.begin() as con:
+        for nome, tipo in COLUNAS_NOVAS.items():
+            if nome not in colunas:
+                if engine.dialect.name == "sqlite":
+                    tipo = tipo.replace("TIMESTAMP WITH TIME ZONE", "DATETIME")
+                con.execute(text(f"ALTER TABLE chamados ADD COLUMN {nome} {tipo}"))
 
 
 @asynccontextmanager
@@ -89,6 +99,18 @@ def buscar_local(db: Session, codigo: str) -> Local | None:
 def registrar(db: Session, c: Chamado, acao: str, usuario: Usuario | None = None,
               pessoa: Pessoa | None = None, detalhe: str = "") -> None:
     db.add(Evento(chamado_id=c.id, acao=acao, usuario=usuario, pessoa=pessoa, detalhe=detalhe))
+
+
+def autoconfirmar(db: Session) -> None:
+    """Chamados esperando o professor há mais que o prazo são confirmados automaticamente."""
+    limite = agora() - timedelta(hours=config.CONFIRMACAO_HORAS)
+    vencidos = list(db.scalars(select(Chamado).where(Chamado.status == "confirmacao",
+                                                     Chamado.resolvido_em <= limite)).unique())
+    for c in vencidos:
+        c.status, c.confirmado_em = "resolvido", agora()
+        registrar(db, c, "confirmado", detalhe=f"automático: sem resposta em {config.CONFIRMACAO_HORAS} h")
+    if vencidos:
+        db.commit()
 
 
 def buscar_chamado(db: Session, id_: int) -> Chamado:
@@ -198,7 +220,7 @@ def abrir_chamado(dados: S.ChamadoNovo, request: Request, tarefas: BackgroundTas
     # Mesmo pedido repetido em poucos minutos: devolve o chamado que já está aberto
     limite = agora() - timedelta(seconds=config.JANELA_DUPLICADO_SEG)
     repetido = db.scalar(select(Chamado).where(
-        Chamado.local_id == local.id, Chamado.tipo == dados.tipo, Chamado.status != "resolvido",
+        Chamado.local_id == local.id, Chamado.tipo == dados.tipo, Chamado.status.in_(("aberto", "atendimento")),
         Chamado.criado_em >= limite).order_by(Chamado.id.desc()))
     if repetido:
         return S.ChamadoCriado(id=repetido.id, local=local.nome, tipo=repetido.tipo, tipo_nome=TIPOS[repetido.tipo],
@@ -214,6 +236,53 @@ def abrir_chamado(dados: S.ChamadoNovo, request: Request, tarefas: BackgroundTas
     tarefas.add_task(notificar_ntfy, f"{local.nome}: {TIPOS[c.tipo]}", texto, ["bell"], 4)
     return S.ChamadoCriado(id=c.id, local=local.nome, tipo=c.tipo, tipo_nome=TIPOS[c.tipo],
                            criado_em=S._utc(c.criado_em))
+
+
+# ---------------------------------------------------------------- confirmação pelo professor
+def chamado_do_professor(db: Session, id_: int, p: Pessoa) -> Chamado:
+    c = db.get(Chamado, id_)
+    if not c or c.aberto_por_id != p.id:  # chamado de outra pessoa = "não encontrado"
+        raise HTTPException(404, "Chamado não encontrado")
+    return c
+
+
+@app.get("/professor/chamados", tags=["professores"], response_model=list[S.MeuChamado])
+def meus_chamados(db: Session = Depends(get_db), p: Pessoa = Depends(professor_atual)):
+    """Chamados do próprio professor nos últimos 30 dias; os "confirmacao" esperam a resposta dele."""
+    autoconfirmar(db)
+    desde = agora() - timedelta(days=30)
+    q = select(Chamado).where(Chamado.aberto_por_id == p.id, Chamado.criado_em >= desde)
+    return [S.MeuChamado.de(c) for c in db.scalars(q.order_by(Chamado.id.desc()).limit(50)).unique()]
+
+
+@app.post("/professor/chamados/{id_}/confirmar", tags=["professores"], response_model=S.MeuChamado)
+def confirmar(id_: int, db: Session = Depends(get_db), p: Pessoa = Depends(professor_atual)):
+    """O professor confirma que o problema foi resolvido."""
+    c = chamado_do_professor(db, id_, p)
+    if c.status != "confirmacao":
+        raise HTTPException(409, "Este chamado não está esperando confirmação")
+    c.status, c.confirmado_em = "resolvido", agora()
+    registrar(db, c, "confirmado", pessoa=p)
+    db.commit()
+    return S.MeuChamado.de(c)
+
+
+@app.post("/professor/chamados/{id_}/rejeitar", tags=["professores"], response_model=S.MeuChamado)
+def rejeitar(id_: int, dados: S.Rejeicao, tarefas: BackgroundTasks, db: Session = Depends(get_db),
+             p: Pessoa = Depends(professor_atual)):
+    """O professor diz que ainda não resolveu: o chamado volta para o técnico, que é avisado."""
+    c = chamado_do_professor(db, id_, p)
+    if c.status != "confirmacao":
+        raise HTTPException(409, "Este chamado não está esperando confirmação")
+    c.status = "atendimento" if c.atendido_por_id else "aberto"
+    c.resolvido_em = None
+    c.rejeicao = dados.motivo
+    registrar(db, c, "rejeitado", pessoa=p, detalhe=dados.motivo)
+    db.commit()
+    quem = f" ({c.atendido_por.nome})" if c.atendido_por else ""
+    tarefas.add_task(notificar_ntfy, f"❌ Não resolveu: {c.local.nome}{quem}",
+                     f"{TIPOS[c.tipo]} · chamado #{c.id}\n{p.nome}: {dados.motivo}", ["x"], 4)
+    return S.MeuChamado.de(c)
 
 
 # ---------------------------------------------------------------- liberação dos professores (TI)
@@ -284,6 +353,7 @@ def listar(status_: list[str] | None = Query(None, alias="status", description="
            desde: datetime | None = None, ate: datetime | None = None, local_id: int | None = None,
            limite: int = Query(200, ge=1, le=1000),
            db: Session = Depends(get_db), _: Usuario = Depends(usuario_atual)):
+    autoconfirmar(db)
     q = select(Chamado)
     if status_:
         invalidos = set(status_) - set(STATUS)
@@ -326,7 +396,7 @@ def assumir(id_: int, tarefas: BackgroundTasks, transferir: bool = False,
     """O técnico assume o chamado (fica registrado quem e quando) e a equipe é avisada.
     Se outro técnico já assumiu, só passa para você com `transferir=true`."""
     c = buscar_chamado(db, id_)
-    if c.status == "resolvido":
+    if c.status in ("resolvido", "confirmacao"):
         raise HTTPException(409, "Chamado já resolvido. Reabra antes de assumir.")
     if c.status == "atendimento" and c.atendido_por_id == u.id:
         return S.ChamadoOut.de(c)  # já é seu
@@ -354,18 +424,21 @@ def atender(id_: int, tarefas: BackgroundTasks, db: Session = Depends(get_db), u
 
 @app.post("/chamados/{id_}/resolver", tags=["chamados"], response_model=S.ChamadoOut)
 def resolver(id_: int, dados: S.Resolucao, db: Session = Depends(get_db), u: Usuario = Depends(usuario_atual)):
-    """Resolve o chamado. Se outro técnico assumiu, só ele (ou um administrador) resolve."""
+    """Resolve o chamado. Se outro técnico assumiu, só ele (ou um administrador) resolve.
+    Chamado aberto por professor fica "confirmacao" até ele confirmar (ou o prazo vencer)."""
     c = buscar_chamado(db, id_)
-    if c.status == "resolvido":
+    if c.status in ("resolvido", "confirmacao"):
         raise HTTPException(409, "Chamado já resolvido")
     if c.status == "atendimento" and c.atendido_por_id not in (None, u.id) and u.papel != "admin":
         raise HTTPException(409, f"{c.atendido_por.nome} assumiu este chamado. Transfira para você antes de resolver.")
     if c.status == "aberto":  # resolver direto = assumir e resolver
         c.atendido_por, c.atendido_em = u, agora()
         registrar(db, c, "assumido", usuario=u)
-    c.status = "resolvido"
+    c.status = "confirmacao" if c.aberto_por_id else "resolvido"
     c.resolvido_em = agora()
+    c.confirmado_em = None if c.aberto_por_id else c.resolvido_em
     c.solucao = dados.solucao.strip()
+    c.rejeicao = ""
     registrar(db, c, "resolvido", usuario=u, detalhe=c.solucao)
     db.commit()
     return S.ChamadoOut.de(c)
@@ -376,7 +449,7 @@ def reabrir(id_: int, db: Session = Depends(get_db), u: Usuario = Depends(usuari
     """Volta para "aberto", sem ninguém assumido, para qualquer técnico pegar."""
     c = buscar_chamado(db, id_)
     c.status = "aberto"
-    c.resolvido_em = None
+    c.resolvido_em = c.confirmado_em = None
     c.atendido_por, c.atendido_em = None, None
     registrar(db, c, "reaberto", usuario=u)
     db.commit()
@@ -385,7 +458,7 @@ def reabrir(id_: int, db: Session = Depends(get_db), u: Usuario = Depends(usuari
 
 @app.get("/chamados/{id_}/registro", tags=["chamados"], response_model=list[S.EventoOut])
 def registro(id_: int, db: Session = Depends(get_db), _: Usuario = Depends(usuario_atual)):
-    """Linha do tempo do chamado: aberto, assumido, transferido, resolvido, reaberto."""
+    """Linha do tempo do chamado: aberto, assumido, transferido, resolvido, confirmado, rejeitado, reaberto."""
     buscar_chamado(db, id_)
     eventos = db.scalars(select(Evento).where(Evento.chamado_id == id_).order_by(Evento.quando, Evento.id)).unique()
     return [S.EventoOut.de(e) for e in eventos]
@@ -394,16 +467,21 @@ def registro(id_: int, db: Session = Depends(get_db), _: Usuario = Depends(usuar
 @app.get("/estatisticas", tags=["chamados"], response_model=S.Estatisticas)
 def estatisticas(dias: int = Query(30, ge=1, le=730), db: Session = Depends(get_db),
                  _: Usuario = Depends(usuario_atual)):
+    autoconfirmar(db)
     inicio = agora() - timedelta(days=dias)
     lista = list(db.scalars(select(Chamado).where(Chamado.criado_em >= inicio)).unique())
     fuso = ZoneInfo(config.FUSO)
     tempos = [(S._utc(c.resolvido_em) - S._utc(c.criado_em)).total_seconds() / 60
-              for c in lista if c.status == "resolvido" and c.resolvido_em]
+              for c in lista if c.status in ("resolvido", "confirmacao") and c.resolvido_em]
+    rejeicoes = db.scalar(select(func.count()).select_from(Evento).join(Chamado).where(
+        Evento.acao == "rejeitado", Chamado.criado_em >= inicio)) or 0
     return S.Estatisticas(
         dias=dias, total=len(lista),
         abertos=sum(c.status == "aberto" for c in lista),
         em_atendimento=sum(c.status == "atendimento" for c in lista),
-        resolvidos=sum(c.status == "resolvido" for c in lista),
+        resolvidos=sum(c.status in ("resolvido", "confirmacao") for c in lista),
+        aguardando_confirmacao=sum(c.status == "confirmacao" for c in lista),
+        rejeicoes=rejeicoes,
         tempo_medio_resolucao_min=round(sum(tempos) / len(tempos), 1) if tempos else None,
         por_tipo=dict(Counter(TIPOS.get(c.tipo, c.tipo) for c in lista).most_common()),
         por_local=dict(Counter(c.local.nome for c in lista).most_common()),
