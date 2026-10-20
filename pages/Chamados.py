@@ -15,7 +15,7 @@ import pandas as pd
 import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from api_cliente import ErroAPI, api, exigir_configuracao  # noqa: E402
+from api_cliente import ErroAPI, api, eh_admin, exigir_configuracao  # noqa: E402
 
 FUSO = "America/Sao_Paulo"
 ATUALIZAR_A_CADA = 15  # segundos
@@ -25,7 +25,22 @@ ICONE_TIPO = {"internet": "📶", "chave": "🔑", "lousa": "🖊️", "projetor
 TIPOS = {"internet": "Internet / Wi-Fi", "chave": "Chave do carrinho de tablets", "lousa": "Lousa digital",
          "projetor": "Projetor", "computador": "Computador / notebook", "som": "Som",
          "tablet": "Tablet de aluno", "impressora": "Impressora", "outro": "Outro"}
-STATUS = {"aberto": "🔴 Aberto", "atendimento": "🟡 Em atendimento", "resolvido": "🟢 Resolvido"}
+STATUS = {"aberto": "🔴 Aberto", "atendimento": "🟡 Assumido", "resolvido": "🟢 Resolvido"}
+
+
+def acao(metodo, caminho, corpo=None, params=None, aviso=None):
+    """Executa uma ação no chamado; conflito (ex.: outro técnico já assumiu) vira um aviso na tela."""
+    try:
+        api(metodo, caminho, corpo, params)
+        if aviso:
+            st.session_state["aviso"] = aviso
+    except ErroAPI as e:
+        st.session_state["conflito"] = str(e).split(": ", 1)[-1] if e.status == 409 else str(e)
+    st.rerun()
+
+
+ACOES = {"aberto": "📲 Aberto", "registrado": "📝 Registrado", "assumido": "✋ Assumido", "transferido": "↪ Transferido",
+         "resolvido": "✅ Resolvido", "reaberto": "↩️ Reaberto"}
 
 
 def para_df(lista):
@@ -68,6 +83,8 @@ if not hasattr(st, "fragment"):
 st.title("🛠️ Chamados do TI")
 if "aviso" in st.session_state:
     st.toast(st.session_state.pop("aviso"), icon="✅")
+if "conflito" in st.session_state:
+    st.warning(st.session_state.pop("conflito"))
 
 # ---- primeira configuração
 exigir_configuracao()
@@ -94,7 +111,7 @@ def bloco_ativos():
 
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("🔴 Abertos", int((ativos["status"] == "aberto").sum()))
-    m2.metric("🟡 Em atendimento", int((ativos["status"] == "atendimento").sum()))
+    m2.metric("🟡 Assumidos", int((ativos["status"] == "atendimento").sum()))
     m3.metric("🟢 Resolvidos hoje", int((resolvidos["resolvido_em"] >= hoje_local()).sum()))
     m4.metric("Atualizado", datetime.now().strftime("%H:%M:%S"))
 
@@ -111,22 +128,30 @@ def bloco_ativos():
             if c["aberto_por"]:
                 linha += f" · por {c['aberto_por']}"
             if c["status"] == "atendimento" and c["atendido_por"]:
-                linha += f" · com {c['atendido_por']}"
+                linha += f" · assumido por {c['atendido_por']}"
+                if pd.notna(c["atendido_em"]):
+                    linha += f" às {c['atendido_em']:%H:%M}"
             col_info.caption(linha)
             if c["detalhe"]:
                 col_info.write(f"💬 {c['detalhe']}")
 
+            eu = st.session_state.get("nome")
+            de_outro = c["status"] == "atendimento" and c["atendido_por"] not in (None, eu)
             if c["status"] == "aberto":
-                if col_acao.button("🚶 Atender", key=f"at_{c['id']}", use_container_width=True):
-                    api("POST", f"/chamados/{c['id']}/atender")
-                    st.rerun()
-            with col_acao.popover("✅ Resolver", use_container_width=True):
-                solucao = st.text_input("O que foi feito? (opcional)", key=f"sol_{c['id']}",
-                                        placeholder="Ex.: troquei a pilha do controle")
-                if st.button("Confirmar", key=f"ok_{c['id']}", type="primary"):
-                    api("POST", f"/chamados/{c['id']}/resolver", {"solucao": solucao})
-                    st.session_state["aviso"] = f"Resolvido: {c['local']} – {c['tipo_nome']}"
-                    st.rerun()
+                if col_acao.button("✋ Assumir", key=f"at_{c['id']}", use_container_width=True, type="primary"):
+                    acao("POST", f"/chamados/{c['id']}/assumir", aviso=f"Você assumiu: {c['local']} – {c['tipo_nome']}")
+            elif de_outro:
+                col_acao.caption(f"Com {c['atendido_por']}")
+                if col_acao.button("↪ Transferir para mim", key=f"tr_{c['id']}", use_container_width=True):
+                    acao("POST", f"/chamados/{c['id']}/assumir", params={"transferir": "true"},
+                         aviso=f"Chamado nº {c['id']} transferido para você")
+            if not de_outro or eh_admin():
+                with col_acao.popover("✅ Resolver", use_container_width=True):
+                    solucao = st.text_input("O que foi feito? (opcional)", key=f"sol_{c['id']}",
+                                            placeholder="Ex.: troquei a pilha do controle")
+                    if st.button("Confirmar", key=f"ok_{c['id']}", type="primary"):
+                        acao("POST", f"/chamados/{c['id']}/resolver", {"solucao": solucao},
+                             aviso=f"Resolvido: {c['local']} – {c['tipo_nome']}")
 
 
 bloco_ativos()
@@ -175,7 +200,7 @@ with aba_hist:
             "Aberto por": filt["aberto_por"].fillna(""),
             "Status": filt["status"].map(STATUS),
             "Resolvido": filt["resolvido_em"].dt.strftime("%d/%m %H:%M").fillna(""),
-            "Solução": filt["solucao"], "Atendido por": filt["atendido_por"].fillna(""),
+            "Solução": filt["solucao"], "Assumido por": filt["atendido_por"].fillna(""),
         })
         st.dataframe(tabela, hide_index=True, use_container_width=True)
 
@@ -186,8 +211,22 @@ with aba_hist:
                           for r in res.itertuples()}
                 escolha = st.selectbox("Chamado", list(opcoes))
                 if st.button("Reabrir"):
-                    api("POST", f"/chamados/{opcoes[escolha]}/reabrir")
-                    st.rerun()
+                    acao("POST", f"/chamados/{opcoes[escolha]}/reabrir", aviso="Chamado reaberto")
+        with st.expander("📜 Registro de um chamado (quem abriu, assumiu, transferiu e resolveu)"):
+            ids = filt["id"].tolist()
+            escolhido = st.selectbox("Chamado", ids, key="reg_id",
+                                     format_func=lambda i: "nº {} – {} – {}".format(
+                                         i, *filt.loc[filt["id"] == i, ["local", "tipo_nome"]].iloc[0]))
+            if escolhido is not None:
+                try:
+                    eventos = api("GET", f"/chamados/{escolhido}/registro")
+                except ErroAPI as e:
+                    eventos = []
+                    st.error(str(e))
+                for ev in eventos:
+                    quando = pd.Timestamp(ev["quando"]).tz_convert(FUSO).strftime("%d/%m %H:%M")
+                    st.markdown(f"`{quando}` **{ACOES.get(ev['acao'], ev['acao'])}** por {ev['quem'] or '—'}"
+                                + (f" · {ev['detalhe']}" if ev["detalhe"] else ""))
         st.download_button("⬇️ Baixar (CSV / Excel)", tabela.to_csv(index=False, sep=";").encode("utf-8-sig"),
                            "chamados.csv", "text/csv")
 

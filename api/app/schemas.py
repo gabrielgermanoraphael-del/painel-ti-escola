@@ -113,6 +113,18 @@ class ChamadoOut(BaseModel):
         )
 
 
+class EventoOut(BaseModel):
+    quando: datetime
+    acao: str
+    quem: str
+    detalhe: str
+
+    @classmethod
+    def de(cls, e) -> "EventoOut":
+        quem = e.usuario.nome if e.usuario else (e.pessoa.nome if e.pessoa else "")
+        return cls(quando=_utc(e.quando), acao=e.acao, quem=quem, detalhe=e.detalhe or "")
+
+
 class Estatisticas(BaseModel):
     dias: int
     total: int

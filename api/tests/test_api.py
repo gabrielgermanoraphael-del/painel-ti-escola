@@ -155,13 +155,13 @@ class TesteAPI(unittest.TestCase):
         self.assertEqual(self.cli.patch("/usuarios/2", json={"papel": "admin"}, headers=h).status_code, 403)
 
     # ---------------- fluxo completo do TI
-    def test_fluxo_atender_resolver_reabrir(self):
+    def test_fluxo_assumir_resolver_reabrir(self):
         h = self.token()
         id_ = self.abrir({"sala": "5", "tipo": "lousa", "detalhe": "caneta não funciona"}).json()["id"]
         abertos = self.cli.get("/chamados", params={"status": ["aberto", "atendimento"]}, headers=h).json()
         self.assertEqual([c["id"] for c in abertos], [id_])
 
-        c = self.cli.post(f"/chamados/{id_}/atender", headers=h).json()
+        c = self.cli.post(f"/chamados/{id_}/assumir", headers=h).json()
         self.assertEqual((c["status"], c["atendido_por"]), ("atendimento", "Gabriel"))
         self.assertEqual((c["aberto_por"], c["aberto_por_email"]), ("Ana Prof", "ana@educ.indaiatuba.sp.gov.br"))
         self.assertIsNotNone(c["atendido_em"])
@@ -170,7 +170,7 @@ class TesteAPI(unittest.TestCase):
         self.assertEqual((c["status"], c["solucao"]), ("resolvido", "Calibrei o PointWrite"))
         self.assertTrue(c["resolvido_em"].endswith(("+00:00", "Z")))
 
-        self.assertEqual(self.cli.post(f"/chamados/{id_}/atender", headers=h).status_code, 409)
+        self.assertEqual(self.cli.post(f"/chamados/{id_}/assumir", headers=h).status_code, 409)
         c = self.cli.post(f"/chamados/{id_}/reabrir", headers=h).json()
         self.assertEqual((c["status"], c["resolvido_em"]), ("aberto", None))
         self.assertEqual(self.cli.get("/chamados/999", headers=h).status_code, 404)
@@ -239,6 +239,59 @@ class TesteAPI(unittest.TestCase):
         self.assertEqual(self.cli.patch(f"/usuarios/{eu_id}", json={"papel": "tecnico"}, headers=h).status_code, 409)
         self.assertEqual(self.cli.patch(f"/usuarios/{eu_id}", json={"ativo": False}, headers=h).status_code, 409)
         self.assertEqual(self.cli.patch("/usuarios/999", json={"ativo": False}, headers=h).status_code, 404)
+
+
+
+    def test_controle_de_quem_assume(self):
+        gabriel, tec = self.token(), self.token("tec", "senha-forte-2")
+        id_ = self.abrir({"sala": "4", "tipo": "som", "detalhe": "sem som"}).json()["id"]
+        ENVIADOS.clear()
+        c = self.cli.post(f"/chamados/{id_}/assumir", headers=tec).json()
+        self.assertEqual((c["status"], c["atendido_por"]), ("atendimento", "Técnico"))
+        self.assertEqual(ENVIADOS[0][0], "✋ Técnico assumiu")  # a equipe fica sabendo
+        self.assertEqual(ENVIADOS[0][1], f"Sala 4: Som · chamado #{id_}")
+        # assumir de novo o próprio chamado não muda nada nem avisa de novo
+        self.assertEqual(self.cli.post(f"/chamados/{id_}/assumir", headers=tec).status_code, 200)
+        self.assertEqual(len(ENVIADOS), 1)
+        # outro técnico não "rouba" o chamado sem querer
+        r = self.cli.post(f"/chamados/{id_}/assumir", headers=gabriel)
+        self.assertEqual(r.status_code, 409)
+        self.assertIn("Técnico já assumiu", r.json()["detail"])
+        # nem resolve o chamado de outro, a não ser administrador
+        self.cli.post("/usuarios", json={"usuario": "joao", "nome": "João", "senha": "senha-do-joao"}, headers=gabriel)
+        joao = self.token("joao", "senha-do-joao")
+        self.assertEqual(self.cli.post(f"/chamados/{id_}/resolver", json={}, headers=joao).status_code, 409)
+        # transferência explícita fica registrada
+        c = self.cli.post(f"/chamados/{id_}/assumir", params={"transferir": "true"}, headers=joao).json()
+        self.assertEqual(c["atendido_por"], "João")
+        c = self.cli.post(f"/chamados/{id_}/resolver", json={"solucao": "Religuei a caixa"}, headers=joao).json()
+        self.assertEqual(c["status"], "resolvido")
+        self.assertEqual(self.cli.post(f"/chamados/{id_}/resolver", json={}, headers=joao).status_code, 409)
+        # reabrir libera para qualquer um assumir
+        c = self.cli.post(f"/chamados/{id_}/reabrir", headers=gabriel).json()
+        self.assertEqual((c["status"], c["atendido_por"]), ("aberto", None))
+        reg = self.cli.get(f"/chamados/{id_}/registro", headers=gabriel).json()
+        self.assertEqual([(e["acao"], e["quem"]) for e in reg],
+                         [("aberto", "Ana Prof"), ("assumido", "Técnico"), ("transferido", "João"),
+                          ("resolvido", "João"), ("reaberto", "Gabriel")])
+        self.assertEqual(reg[2]["detalhe"], "de Técnico para João")
+        self.assertEqual(reg[3]["detalhe"], "Religuei a caixa")
+        self.assertEqual(self.cli.get("/chamados/999/registro", headers=gabriel).status_code, 404)
+
+    def test_resolver_direto_e_nome_antigo(self):
+        h = self.token()
+        id_ = self.abrir({"sala": "6", "tipo": "lousa"}).json()["id"]
+        c = self.cli.post(f"/chamados/{id_}/resolver", json={"solucao": "Calibrei"}, headers=h).json()
+        self.assertEqual((c["status"], c["atendido_por"]), ("resolvido", "Gabriel"))
+        self.assertIsNotNone(c["atendido_em"])
+        acoes = [e["acao"] for e in self.cli.get(f"/chamados/{id_}/registro", headers=h).json()]
+        self.assertEqual(acoes, ["aberto", "assumido", "resolvido"])
+        # manual também entra no registro, e /atender (painel antigo) ainda funciona
+        locais = {l["nome"]: l["id"] for l in self.cli.get("/locais", headers=h).json()}
+        m = self.cli.post("/chamados/manual", json={"local_id": locais["Secretaria"], "tipo": "impressora"}, headers=h).json()
+        self.assertEqual(self.cli.post(f"/chamados/{m['id']}/atender", headers=h).json()["status"], "atendimento")
+        self.assertEqual([e["acao"] for e in self.cli.get(f"/chamados/{m['id']}/registro", headers=h).json()],
+                         ["registrado", "assumido"])
 
 
 if __name__ == "__main__":

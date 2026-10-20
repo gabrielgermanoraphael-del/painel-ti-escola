@@ -95,3 +95,21 @@ class Chamado(Base):
     local: Mapped[Local] = relationship(lazy="joined")
     atendido_por: Mapped[Usuario | None] = relationship(lazy="joined")
     aberto_por: Mapped["Pessoa | None"] = relationship(lazy="joined")
+
+
+ACOES = ("aberto", "registrado", "assumido", "transferido", "resolvido", "reaberto")
+
+
+class Evento(Base):
+    """Registro de tudo que acontece com um chamado: quem fez, o quê e quando."""
+    __tablename__ = "chamado_eventos"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    chamado_id: Mapped[int] = mapped_column(ForeignKey("chamados.id", ondelete="CASCADE"), index=True)
+    quando: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=agora)
+    acao: Mapped[str] = mapped_column(String(15))
+    usuario_id: Mapped[int | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True)
+    pessoa_id: Mapped[int | None] = mapped_column(ForeignKey("pessoas.id"), nullable=True)
+    detalhe: Mapped[str] = mapped_column(Text, default="")
+
+    usuario: Mapped[Usuario | None] = relationship(lazy="joined")
+    pessoa: Mapped["Pessoa | None"] = relationship(lazy="joined")

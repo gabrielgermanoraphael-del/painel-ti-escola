@@ -42,9 +42,10 @@ Documentação interativa em **`/docs`** depois que a API estiver no ar.
 | GET | `/chamados` | técnico | Lista com filtros (`status`, `desde`, `ate`, `local_id`) |
 | GET | `/chamados/{id}` | técnico | Detalhe de um chamado |
 | POST | `/chamados/manual` | técnico | Registra um pedido feito pessoalmente |
-| POST | `/chamados/{id}/atender` | técnico | Marca "Em atendimento" |
-| POST | `/chamados/{id}/resolver` | técnico | Marca "Resolvido", com a solução |
-| POST | `/chamados/{id}/reabrir` | técnico | Volta para "Aberto" |
+| POST | `/chamados/{id}/assumir` | técnico | Assume o chamado (registra quem e quando) e avisa a equipe. Se outro técnico já assumiu, devolve 409; com `?transferir=true` passa para você |
+| POST | `/chamados/{id}/resolver` | técnico | Marca "Resolvido", com a solução. Só quem assumiu (ou um administrador) resolve |
+| POST | `/chamados/{id}/reabrir` | técnico | Volta para "Aberto", sem ninguém assumido |
+| GET | `/chamados/{id}/registro` | técnico | Linha do tempo: aberto, registrado, assumido, transferido, resolvido, reaberto (quem e quando) |
 | GET | `/estatisticas?dias=30` | técnico | Totais, tempo médio, por tipo, por local e por dia |
 | GET | `/locais` | técnico | Salas cadastradas |
 | POST/PATCH | `/locais` | admin | Cadastra ou desativa salas |
@@ -56,7 +57,7 @@ Documentação interativa em **`/docs`** depois que a API estiver no ar.
 | Perfil | Como entra | Pode |
 |---|---|---|
 | Professor | Google institucional, pela página do QR | Abrir chamado nas salas liberadas para ele |
-| Técnico | Usuário e senha, no painel | Atender e resolver chamados, liberar professores e escolher as salas deles |
+| Técnico | Usuário e senha, no painel | Assumir e resolver chamados, liberar professores e escolher as salas deles |
 | Administrador | Usuário e senha, no painel | Tudo do técnico + criar contas do TI, cadastrar e desativar salas |
 
 ### Como o professor é liberado
@@ -85,7 +86,7 @@ python -m uvicorn app.main:app --reload
 
 Sem `DATABASE_URL`, usa um SQLite local (`chamados_dev.db`). Abra http://127.0.0.1:8000/docs.
 
-Testes (25 cenários, incluindo login Google simulado, permissões por sala, segurança e limites):
+Testes (27 cenários, incluindo login Google simulado, permissões por sala, segurança e limites):
 
 ```bash
 python -m unittest -v                                     # SQLite

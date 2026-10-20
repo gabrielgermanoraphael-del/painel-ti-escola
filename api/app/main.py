@@ -24,7 +24,7 @@ from .config import config
 from .db import Base, SessionLocal, engine, get_db
 from .limite import limite_ip
 from .google_auth import ErroGoogle, verificar_credencial
-from .models import STATUS, TIPOS, Chamado, Local, Pessoa, Usuario, agora
+from .models import STATUS, TIPOS, Chamado, Evento, Local, Pessoa, Usuario, agora
 from .notificar import notificar_ntfy
 from .security import (conferir_senha, criar_token, criar_token_professor, gerar_hash, professor_atual,
                        somente_admin, usuario_atual)
@@ -84,6 +84,11 @@ def buscar_local(db: Session, codigo: str) -> Local | None:
         if l.codigo.casefold() == alvo:
             return l
     return None
+
+
+def registrar(db: Session, c: Chamado, acao: str, usuario: Usuario | None = None,
+              pessoa: Pessoa | None = None, detalhe: str = "") -> None:
+    db.add(Evento(chamado_id=c.id, acao=acao, usuario=usuario, pessoa=pessoa, detalhe=detalhe))
 
 
 def buscar_chamado(db: Session, id_: int) -> Chamado:
@@ -201,6 +206,8 @@ def abrir_chamado(dados: S.ChamadoNovo, request: Request, tarefas: BackgroundTas
 
     c = Chamado(local_id=local.id, tipo=dados.tipo, detalhe=dados.detalhe, origem="qrcode", aberto_por_id=p.id)
     db.add(c)
+    db.flush()
+    registrar(db, c, "aberto", pessoa=p, detalhe="pelo QR code")
     db.commit()
     db.refresh(c)
     texto = (c.detalhe + "\n" if c.detalhe else "") + f"Aberto por {p.nome} · chamado #{c.id}"
@@ -299,50 +306,89 @@ def detalhe(id_: int, db: Session = Depends(get_db), _: Usuario = Depends(usuari
 
 
 @app.post("/chamados/manual", tags=["chamados"], response_model=S.ChamadoOut, status_code=201)
-def manual(dados: S.ChamadoManual, db: Session = Depends(get_db), _: Usuario = Depends(usuario_atual)):
+def manual(dados: S.ChamadoManual, db: Session = Depends(get_db), u: Usuario = Depends(usuario_atual)):
     """Registra um pedido feito pessoalmente ou por telefone."""
     local = db.get(Local, dados.local_id)
     if not local:
         raise HTTPException(404, "Local não encontrado")
     c = Chamado(local_id=local.id, tipo=dados.tipo, detalhe=dados.detalhe, origem="manual")
     db.add(c)
+    db.flush()
+    registrar(db, c, "registrado", usuario=u, detalhe="pedido feito pessoalmente")
     db.commit()
     db.refresh(c)
     return S.ChamadoOut.de(c)
 
 
-@app.post("/chamados/{id_}/atender", tags=["chamados"], response_model=S.ChamadoOut)
-def atender(id_: int, db: Session = Depends(get_db), u: Usuario = Depends(usuario_atual)):
+@app.post("/chamados/{id_}/assumir", tags=["chamados"], response_model=S.ChamadoOut)
+def assumir(id_: int, tarefas: BackgroundTasks, transferir: bool = False,
+            db: Session = Depends(get_db), u: Usuario = Depends(usuario_atual)):
+    """O técnico assume o chamado (fica registrado quem e quando) e a equipe é avisada.
+    Se outro técnico já assumiu, só passa para você com `transferir=true`."""
     c = buscar_chamado(db, id_)
     if c.status == "resolvido":
-        raise HTTPException(409, "Chamado já resolvido. Reabra antes de atender.")
+        raise HTTPException(409, "Chamado já resolvido. Reabra antes de assumir.")
+    if c.status == "atendimento" and c.atendido_por_id == u.id:
+        return S.ChamadoOut.de(c)  # já é seu
+    anterior = c.atendido_por if c.status == "atendimento" else None
+    if anterior and not transferir:
+        raise HTTPException(409, f"{anterior.nome} já assumiu este chamado. Use transferir para passar para você.")
     c.status = "atendimento"
-    c.atendido_em = c.atendido_em or agora()
+    c.atendido_em = agora()
     c.atendido_por = u
+    if anterior:
+        registrar(db, c, "transferido", usuario=u, detalhe=f"de {anterior.nome} para {u.nome}")
+    else:
+        registrar(db, c, "assumido", usuario=u)
     db.commit()
+    tarefas.add_task(notificar_ntfy, f"✋ {u.nome} assumiu", f"{c.local.nome}: {TIPOS[c.tipo]} · chamado #{c.id}",
+                     ["raised_hand"], 3)
     return S.ChamadoOut.de(c)
+
+
+@app.post("/chamados/{id_}/atender", include_in_schema=False, response_model=S.ChamadoOut)
+def atender(id_: int, tarefas: BackgroundTasks, db: Session = Depends(get_db), u: Usuario = Depends(usuario_atual)):
+    """Nome antigo de /assumir (mantido para versões anteriores do painel)."""
+    return assumir(id_, tarefas, False, db, u)
 
 
 @app.post("/chamados/{id_}/resolver", tags=["chamados"], response_model=S.ChamadoOut)
 def resolver(id_: int, dados: S.Resolucao, db: Session = Depends(get_db), u: Usuario = Depends(usuario_atual)):
+    """Resolve o chamado. Se outro técnico assumiu, só ele (ou um administrador) resolve."""
     c = buscar_chamado(db, id_)
+    if c.status == "resolvido":
+        raise HTTPException(409, "Chamado já resolvido")
+    if c.status == "atendimento" and c.atendido_por_id not in (None, u.id) and u.papel != "admin":
+        raise HTTPException(409, f"{c.atendido_por.nome} assumiu este chamado. Transfira para você antes de resolver.")
+    if c.status == "aberto":  # resolver direto = assumir e resolver
+        c.atendido_por, c.atendido_em = u, agora()
+        registrar(db, c, "assumido", usuario=u)
     c.status = "resolvido"
-    c.atendido_em = c.atendido_em or agora()
     c.resolvido_em = agora()
     c.solucao = dados.solucao.strip()
-    if c.atendido_por is None:
-        c.atendido_por = u
+    registrar(db, c, "resolvido", usuario=u, detalhe=c.solucao)
     db.commit()
     return S.ChamadoOut.de(c)
 
 
 @app.post("/chamados/{id_}/reabrir", tags=["chamados"], response_model=S.ChamadoOut)
-def reabrir(id_: int, db: Session = Depends(get_db), _: Usuario = Depends(usuario_atual)):
+def reabrir(id_: int, db: Session = Depends(get_db), u: Usuario = Depends(usuario_atual)):
+    """Volta para "aberto", sem ninguém assumido, para qualquer técnico pegar."""
     c = buscar_chamado(db, id_)
     c.status = "aberto"
     c.resolvido_em = None
+    c.atendido_por, c.atendido_em = None, None
+    registrar(db, c, "reaberto", usuario=u)
     db.commit()
     return S.ChamadoOut.de(c)
+
+
+@app.get("/chamados/{id_}/registro", tags=["chamados"], response_model=list[S.EventoOut])
+def registro(id_: int, db: Session = Depends(get_db), _: Usuario = Depends(usuario_atual)):
+    """Linha do tempo do chamado: aberto, assumido, transferido, resolvido, reaberto."""
+    buscar_chamado(db, id_)
+    eventos = db.scalars(select(Evento).where(Evento.chamado_id == id_).order_by(Evento.quando, Evento.id)).unique()
+    return [S.EventoOut.de(e) for e in eventos]
 
 
 @app.get("/estatisticas", tags=["chamados"], response_model=S.Estatisticas)
