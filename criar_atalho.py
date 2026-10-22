@@ -9,10 +9,28 @@ import sys
 from pathlib import Path
 
 PASTA = Path(__file__).resolve().parent
-exe = Path(sys.executable)
-pythonw = exe.with_name("pythonw.exe")
+
+
+def tem_streamlit(python: Path) -> bool:
+    try:
+        return subprocess.run([str(python), "-c", "import streamlit"], capture_output=True, timeout=60).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+# Prefere o ambiente da API (api\.venv), que é o mesmo do servidor; se não tiver Streamlit, usa o Python atual
+candidatos = [PASTA / "api" / ".venv" / "Scripts" / "python.exe", Path(sys.executable).with_name("python.exe"), Path(sys.executable)]
+python = next((c for c in candidatos if c.exists() and tem_streamlit(c)), None)
+if python is None:
+    venv = PASTA / "api" / ".venv" / "Scripts" / "python.exe"
+    print("Nenhum Python com o Streamlit instalado foi encontrado.")
+    print("Instale no ambiente da API e rode este script de novo:")
+    print(f'  "{venv}" -m pip install -r "{PASTA / "requirements.txt"}"')
+    sys.exit(1)
+pythonw = python.with_name("pythonw.exe")
 if not pythonw.exists():
-    pythonw = exe  # sem pythonw: funciona igual, só pode piscar uma janela
+    pythonw = python  # sem pythonw: funciona igual, só pode piscar uma janela
+print("Usando:", pythonw)
 
 # Os caminhos vão por variáveis de ambiente para não ter problema com espaços e acentos
 env = dict(os.environ,
