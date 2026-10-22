@@ -1,5 +1,5 @@
 """
-Abre o Painel do TI (Streamlit) com um clique, sem janela preta.
+Abre o Painel do TI (Streamlit) com um clique, sem janela preta, direto na página Chamados.
 
 - Se o painel já estiver rodando, só abre a página no navegador.
 - Se não estiver, liga o painel escondido e abre o navegador quando ele estiver pronto.
@@ -15,7 +15,7 @@ import webbrowser
 from pathlib import Path
 
 PORTA = 8501
-ENDERECO = f"http://localhost:{PORTA}"
+ENDERECO = f"http://localhost:{PORTA}/Chamados"  # abre direto nos chamados (APs e Professores ficam no menu)
 PASTA = Path(__file__).resolve().parent
 LOG = PASTA / "painel_erros.log"
 
