@@ -20,3 +20,7 @@ api.json
 ntfy.json
 ntfy-servidor/server.yml
 ntfy-servidor/credenciais.txt
+
+# Servidor local (configuração e banco)
+servidor-local/config_local.cmd
+dados/
