@@ -1,0 +1,32 @@
+# Modelo do server.yml. NÃO edite à mão: rode ./configurar.sh, que gera o server.yml de verdade
+# (com os usuários, senhas criptografadas e tokens). O server.yml não vai para o GitHub.
+
+listen-http: ":80"
+behind-proxy: true                 # o Caddy passa o IP real (limites por visitante funcionam)
+
+cache-file: "/var/lib/ntfy/cache.db"
+cache-duration: "24h"              # o celular recebe o que perdeu se ficar até 24 h sem internet
+
+# ---- Segurança: ninguém lê nem publica sem login ----
+auth-file: "/var/lib/ntfy/user.db"
+auth-default-access: "deny-all"
+enable-signup: false
+web-root: "disable"                # sem site público; o acesso é só pelo app e pela API
+
+# Usuários (senha em bcrypt). Quem sai do arquivo é apagado ao reiniciar.
+auth-users:
+  - "gabriel:$2a$10$EXEMPLO:user"
+  - "api:$2a$10$EXEMPLO:user"
+  - "monitor:$2a$10$EXEMPLO:user"
+
+# Quem pode o quê (ro = só ler, wo = só publicar)
+auth-access:
+  - "gabriel:chamados:ro"
+  - "gabriel:aps:ro"
+  - "api:chamados:wo"
+  - "monitor:aps:wo"
+
+# Tokens usados pela API e pelo monitor de APs (no lugar de senha)
+auth-tokens:
+  - "api:tk_EXEMPLO:API de chamados"
+  - "monitor:tk_EXEMPLO:Monitor de APs"

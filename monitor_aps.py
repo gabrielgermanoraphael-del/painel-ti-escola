@@ -21,22 +21,32 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
 # ====================== CONFIGURAÇÃO ======================
-TOPICO_NTFY = "chamados-aparecido-batista"  # mesmo tópico do app ntfy
+# Servidor de notificações. Com o servidor ntfy próprio do TI, crie o arquivo ntfy.json nesta pasta
+# (o configurar.sh mostra o conteúdo pronto):  {"servidor": "https://...", "topico": "aps", "token": "tk_..."}
+# Sem o ntfy.json, usa o ntfy.sh público com o tópico abaixo.
+SERVIDOR_NTFY = "https://ntfy.sh"
+TOPICO_NTFY = "chamados-aparecido-batista"
+TOKEN_NTFY = ""
 INTERVALO_SEGUNDOS = 60      # de quanto em quanto tempo testa os APs
 FALHAS_PARA_ALERTAR = 3      # quantos testes seguidos sem resposta antes de avisar
 TENTATIVAS_POR_TESTE = 2     # pings por AP em cada teste
 TIMEOUT_PING_MS = 1000       # espera máxima de cada ping
+# Opcional: endereço da API de chamados (ex.: https://sua-api.onrender.com). Se preenchido, o monitor
+# "cutuca" a API a cada 10 minutos para ela não adormecer no plano gratuito da nuvem.
+API_SAUDE_URL = ""
 # ===========================================================
 
 PASTA = Path(__file__).resolve().parent
 ARQUIVO_APS = PASTA / "aps.txt"
 ARQUIVO_LOG = PASTA / "monitor_aps.log"
+ARQUIVO_NTFY = PASTA / "ntfy.json"
 NO_WINDOWS = platform.system() == "Windows"
 
 
@@ -104,21 +114,44 @@ def ping(ip):
     return False
 
 
-def tem_internet():
-    """Confere se o próprio notebook está conectado (consegue alcançar o ntfy)."""
+def config_ntfy():
+    """Servidor, tópico e token: do ntfy.json (servidor próprio) ou os valores do topo do arquivo."""
     try:
-        with socket.create_connection(("ntfy.sh", 443), timeout=5):
+        cfg = json.loads(ARQUIVO_NTFY.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        cfg = {}
+    except (OSError, ValueError) as e:
+        # Não cai para o ntfy.sh público: os avisos vazariam para fora do servidor privado
+        log(f"ntfy.json inválido ({e}); notificação NÃO enviada. Corrija o arquivo.")
+        return None
+    return (str(cfg.get("servidor") or SERVIDOR_NTFY).rstrip("/"), str(cfg.get("topico") or TOPICO_NTFY),
+            str(cfg.get("token") or TOKEN_NTFY))
+
+
+def tem_internet():
+    """Confere se o próprio notebook está conectado (consegue alcançar o servidor de notificações)."""
+    cfg = config_ntfy()
+    host = (urllib.parse.urlsplit(cfg[0]).hostname if cfg else None) or "ntfy.sh"
+    try:
+        with socket.create_connection((host, 443), timeout=5):
             return True
     except OSError:
         return False
 
 
 def notificar(titulo, mensagem, tags, prioridade=4):
+    cfg = config_ntfy()
+    if cfg is None:
+        return False
+    servidor, topico, token = cfg
     corpo = json.dumps({
-        "topic": TOPICO_NTFY, "title": titulo, "message": mensagem,
+        "topic": topico, "title": titulo, "message": mensagem,
         "tags": tags, "priority": prioridade,
     }).encode("utf-8")
-    req = urllib.request.Request("https://ntfy.sh/", data=corpo, method="POST")
+    req = urllib.request.Request(servidor + "/", data=corpo, method="POST",
+                                 headers={"Content-Type": "application/json"})
+    if token:
+        req.add_header("Authorization", "Bearer " + token)
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
             return 200 <= r.status < 300
@@ -201,6 +234,20 @@ def salvar_status(aps, resultado, falhas, caido_desde, sem_rede=False):
         pass
 
 
+_ultimo_cutucao = 0.0
+
+
+def manter_api_acordada():
+    global _ultimo_cutucao
+    if not API_SAUDE_URL or time.time() - _ultimo_cutucao < 600:
+        return
+    _ultimo_cutucao = time.time()
+    try:
+        urllib.request.urlopen(API_SAUDE_URL.rstrip("/") + "/saude", timeout=90).close()
+    except Exception:  # noqa: BLE001 - só um "bom dia" para a API, não pode atrapalhar o monitor
+        pass
+
+
 def monitorar(aps):
     falhas = [0] * len(aps)                  # testes seguidos sem resposta (uma posição por AP)
     caido_desde = {}                         # posição do AP -> horário em que foi considerado caído
@@ -214,6 +261,7 @@ def monitorar(aps):
 
     while True:
         inicio = time.time()
+        manter_api_acordada()
 
         # Lista de APs editada (pelo painel ou no bloco de notas)? Recarrega sem precisar reiniciar.
         try:

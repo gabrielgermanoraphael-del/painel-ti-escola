@@ -10,3 +10,13 @@ eventos.csv
 __pycache__/
 *.pyc
 .venv/
+
+# API e painel conectado (dados e credenciais locais)
+api.json
+.env
+*.db
+
+# Servidor ntfy (credenciais e configuração gerada)
+ntfy.json
+ntfy-servidor/server.yml
+ntfy-servidor/credenciais.txt
