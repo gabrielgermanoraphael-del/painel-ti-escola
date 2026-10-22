@@ -11,6 +11,7 @@ Painel do TI (Streamlit, neste PC) ───────────────
 |---|---|
 | `iniciar_servidor.bat` | Liga a API (dois cliques). Também faz o backup do dia. |
 | `criar_usuario.bat` | Cria uma conta do TI para o painel. |
+| `criar_atalho_servidor.bat` | Cria o ícone **Servidor do TI** na área de trabalho (e, se quiser, a inicialização automática). |
 | `config_local.cmd` | Criado na 1ª vez. Guarda o Client ID, o segredo e o tópico. **Fica só neste PC** (está no `.gitignore`). |
 | `../dados/chamados.db` | O banco de dados. Os backups ficam em `../dados/backup` (os últimos 30 dias). Também fora do GitHub. |
 
@@ -51,10 +52,13 @@ powercfg /change hibernate-timeout-ac 0
 ```
 A tela ainda pode apagar; o que importa é o PC não suspender.
 
-## Ligar sozinho ao entrar no Windows (opcional)
+## Atalho na área de trabalho
 
-1. Aperte `Win + R`, digite `shell:startup` e dê Enter.
-2. Nessa pasta, crie um **atalho** para `iniciar_servidor.bat`.
+Dê dois cliques em `criar_atalho_servidor.bat`. Ele cria o ícone **Servidor do TI** na área de trabalho. O atalho abre o servidor numa janela minimizada.
+
+No fim, o script pergunta se você quer que o servidor ligue **sozinho ao entrar no Windows**. Se responder `s`, ele também coloca o atalho na pasta de inicialização. Para desfazer, apague o atalho de `shell:startup` (aperte `Win + R`, digite `shell:startup` e dê Enter).
+
+Se clicar no atalho com o servidor já ligado, ele só avisa e não abre outro.
 
 ## Cuidados
 

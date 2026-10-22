@@ -1,7 +1,14 @@
 @echo off
 title Servidor Chamar o TI
 call "%~dp0_ambiente.cmd"
-if not "%AMBIENTE_OK%"=="1" goto :fim
+if not "%AMBIENTE_OK%"=="1" goto :jaligado
+echo O servidor JA ESTA LIGADO em outra janela (veja a barra de tarefas).
+echo Nao precisa abrir de novo.
+
+:fim
+
+python -c "import socket,sys;sys.exit(1 if socket.socket().connect_ex(('127.0.0.1',8000))==0 else 0)"
+if errorlevel 1 goto :jaligado
 
 python "%~dp0backup_banco.py" "%DADOS%"
 echo.
